@@ -237,14 +237,12 @@ class JointTrainer(BaseTrainer):
                 pk_pred_orig = pk_pred_orig.unsqueeze(-1)  # [B, 1]
             
             # Determine PD input dimension
-            if hasattr(self.model, 'enc_pd') and hasattr(self.model.enc_pd, 'in_dim'):
-                pd_input_dim = self.model.enc_pd.in_dim - 1  # Subtract 1 for PK prediction
+            # PD encoder expects PD features (12) + PK prediction (1) = 13 total
+            # So we need to extract 12 PD features from the input
+            if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                pd_input_dim = 12  # With feature engineering: PD uses 12 features
             else:
-                # Fallback: determine based on feature engineering
-                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
-                    pd_input_dim = 12  # With feature engineering
-                else:
-                    pd_input_dim = 7   # Without feature engineering
+                pd_input_dim = 7   # Without feature engineering: PD uses 7 features
             
             # Extract PD features only
             pd_input = x[:, :pd_input_dim]  # Use correct number of features for PD
@@ -334,14 +332,12 @@ class JointTrainer(BaseTrainer):
                         pk_input_dim_mix = 7   # Without feature engineering
                 
                 # Determine PD input dimension for mixup
-                if hasattr(self.model, 'enc_pd') and hasattr(self.model.enc_pd, 'in_dim'):
-                    pd_input_dim_mix = self.model.enc_pd.in_dim - 1  # Subtract 1 for PK prediction
+                # PD encoder expects PD features (12) + PK prediction (1) = 13 total
+                # So we need to extract 12 PD features from the input
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pd_input_dim_mix = 12  # With feature engineering: PD uses 12 features
                 else:
-                    # Fallback: determine based on feature engineering
-                    if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
-                        pd_input_dim_mix = 12  # With feature engineering
-                    else:
-                        pd_input_dim_mix = 7   # Without feature engineering
+                    pd_input_dim_mix = 7   # Without feature engineering: PD uses 7 features
                 
                 # Apply mixup to PK target
                 mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :pk_input_dim_mix], target_pk_mix, self.config.mixup_alpha)
