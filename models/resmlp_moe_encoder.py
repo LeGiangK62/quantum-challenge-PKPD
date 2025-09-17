@@ -143,21 +143,41 @@ class MoEBlock(nn.Module):
         aux_loss = 0.0
         
         for i in range(self.top_k):
-            expert_idx = top_k_indices[:, i]
-            expert_probs = top_k_probs[:, i]
+            # Handle both 1D and 2D cases
+            if top_k_indices.dim() == 1:
+                expert_idx = top_k_indices[i:i+1]  # Keep as 1D tensor
+                expert_probs = top_k_probs[i:i+1]
+            else:
+                expert_idx = top_k_indices[:, i]
+                expert_probs = top_k_probs[:, i]
             
             # Get expert outputs
             expert_outputs = []
             for j in range(self.num_experts):
                 mask = (expert_idx == j)
                 if mask.any():
-                    expert_input = x_flat[mask]
+                    # Ensure mask and x_flat have compatible shapes
+                    if mask.dim() == 0:  # scalar mask
+                        mask = mask.unsqueeze(0)
+                    if expert_idx.dim() == 1 and expert_idx.size(0) == 1:  # single sample case
+                        expert_input = x_flat
+                    else:
+                        expert_input = x_flat[mask]
                     expert_output = self.experts[j](expert_input)
                     expert_outputs.append((mask, expert_output * expert_probs[mask].unsqueeze(-1)))
             
             # Combine expert outputs
             for mask, expert_output in expert_outputs:
-                output[mask] += expert_output
+                # Ensure mask and output have compatible shapes
+                if mask.dim() == 0:  # scalar mask
+                    mask = mask.unsqueeze(0)
+                if expert_idx.dim() == 1 and expert_idx.size(0) == 1:  # single sample case
+                    # Ensure shapes match for broadcasting
+                    if expert_output.dim() > output.dim():
+                        expert_output = expert_output.squeeze(0)
+                    output += expert_output
+                else:
+                    output[mask] += expert_output
         
         # Reshape back to original shape
         if x.dim() == 3:
@@ -168,7 +188,11 @@ class MoEBlock(nn.Module):
             # Fraction of tokens routed to each expert
             expert_counts = torch.zeros(self.num_experts, device=x.device)
             for i in range(self.top_k):
-                expert_idx = top_k_indices[:, i]
+                # Handle both 1D and 2D cases
+                if top_k_indices.dim() == 1:
+                    expert_idx = top_k_indices[i:i+1]  # Keep as 1D tensor
+                else:
+                    expert_idx = top_k_indices[:, i]
                 for j in range(self.num_experts):
                     expert_counts[j] += (expert_idx == j).float().sum()
             
