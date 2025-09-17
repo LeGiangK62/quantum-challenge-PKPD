@@ -236,14 +236,28 @@ class JointTrainer(BaseTrainer):
             if pk_pred_orig.dim() == 1:
                 pk_pred_orig = pk_pred_orig.unsqueeze(-1)  # [B, 1]
             
+            # Determine PD input dimension
+            if hasattr(self.model, 'enc_pd') and hasattr(self.model.enc_pd, 'in_dim'):
+                pd_input_dim = self.model.enc_pd.in_dim - 1  # Subtract 1 for PK prediction
+            else:
+                # Fallback: determine based on feature engineering
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pd_input_dim = 12  # With feature engineering
+                else:
+                    pd_input_dim = 7   # Without feature engineering
+            
+            # Extract PD features only
+            pd_input = x[:, :pd_input_dim]  # Use correct number of features for PD
+            
             # Add PK prediction to batch for forward_pd
             if isinstance(batch, dict):
                 batch_with_pk = batch.copy()
+                batch_with_pk["x"] = pd_input  # Use PD features only
                 batch_with_pk[self.model.pk_input_key] = pk_pred_orig
             else:
                 # For tuple/list batch format, create a dict with PK prediction
                 batch_with_pk = {
-                    "x": batch[0],
+                    "x": pd_input,  # Use PD features only
                     "y": batch[1],
                     self.model.pk_input_key: pk_pred_orig
                 }
@@ -319,10 +333,20 @@ class JointTrainer(BaseTrainer):
                     else:
                         pk_input_dim_mix = 7   # Without feature engineering
                 
+                # Determine PD input dimension for mixup
+                if hasattr(self.model, 'enc_pd') and hasattr(self.model.enc_pd, 'in_dim'):
+                    pd_input_dim_mix = self.model.enc_pd.in_dim - 1  # Subtract 1 for PK prediction
+                else:
+                    # Fallback: determine based on feature engineering
+                    if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                        pd_input_dim_mix = 12  # With feature engineering
+                    else:
+                        pd_input_dim_mix = 7   # Without feature engineering
+                
                 # Apply mixup to PK target
                 mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :pk_input_dim_mix], target_pk_mix, self.config.mixup_alpha)
                 # Apply mixup to PD target  
-                mixed_x_pd, y_a_pd, y_b_pd, lam_pd = self.apply_mixup(x, target_pd_mix, self.config.mixup_alpha)
+                mixed_x_pd, y_a_pd, y_b_pd, lam_pd = self.apply_mixup(x[:, :pd_input_dim_mix], target_pd_mix, self.config.mixup_alpha)
                 
                 # Create mixed batches
                 pk_mixed_batch = (mixed_x_pk, target_pk_mix) if isinstance(batch, (list, tuple)) else {"x": mixed_x_pk, "y": target_pk_mix}
