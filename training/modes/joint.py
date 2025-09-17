@@ -250,14 +250,13 @@ class JointTrainer(BaseTrainer):
             # Add PK prediction to batch for forward_pd
             if isinstance(batch, dict):
                 batch_with_pk = batch.copy()
-                batch_with_pk["x"] = pd_input  # Use PD features only
-                batch_with_pk[self.model.pk_input_key] = pk_pred_orig
+                batch_with_pk["x"] = pd_input  # Use PD features only (12 features)
+                # PK prediction will be concatenated in forward_pd
             else:
                 # For tuple/list batch format, create a dict with PK prediction
                 batch_with_pk = {
-                    "x": pd_input,  # Use PD features only
+                    "x": pd_input,  # Use PD features only (12 features)
                     "y": batch[1],
-                    self.model.pk_input_key: pk_pred_orig
                 }
             
             pd_outs_orig, z_pd_orig, _ = self.model.forward_pd(batch_with_pk, pk_pred_orig, z_pk_orig)
