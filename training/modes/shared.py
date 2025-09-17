@@ -389,7 +389,7 @@ class SharedTrainer(BaseTrainer):
                 
                 # Forward pass with mixed data
                 pk_pred_mix, z_pk_mix, _ = self.model.forward_pk(pk_mixed_batch)
-                pd_pred_mix, z_pd_mix, _ = self.model.forward_pd(pd_mixed_batch)
+                pd_pred_mix, z_pd_mix, _ = self.model.forward_pd(pd_mixed_batch, pk_pred_mix, z_pk_mix)
                 
                 # Adjust tensor dimensions for mixup PK
                 if pk_pred_mix.dim() == 1 and y_a_pk.dim() == 2:
