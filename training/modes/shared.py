@@ -305,7 +305,13 @@ class SharedTrainer(BaseTrainer):
             elif is_pd_data:
                 # This is PD data - compute both PK and PD losses
                 # First get PK prediction (using PK input dimensions)
-                pk_input = x[:, :11]  # Use first 11 features for PK
+                # Determine PK input dimension
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pk_input_dim = 11  # With feature engineering: PK uses 11 features
+                else:
+                    pk_input_dim = 7   # Without feature engineering: PK uses 7 features
+                
+                pk_input = x[:, :pk_input_dim]  # Use correct number of features for PK
                 pk_batch = (pk_input, target)  # Use same target for PK
                 
                 pk_pred_orig, z_pk_orig, _ = self.model.forward_pk(pk_batch)
@@ -366,8 +372,14 @@ class SharedTrainer(BaseTrainer):
                         target_pk_mix = target
                         target_pd_mix = target
                 
+                # Determine dimensions for mixup
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pk_input_dim_mix = 11  # With feature engineering: PK uses 11 features
+                else:
+                    pk_input_dim_mix = 7   # Without feature engineering: PK uses 7 features
+                
                 # Apply mixup to PK target
-                mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :11], target_pk_mix, self.config.mixup_alpha)
+                mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :pk_input_dim_mix], target_pk_mix, self.config.mixup_alpha)
                 # Apply mixup to PD target  
                 mixed_x_pd, y_a_pd, y_b_pd, lam_pd = self.apply_mixup(x, target_pd_mix, self.config.mixup_alpha)
                 
