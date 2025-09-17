@@ -11,6 +11,8 @@ def get_model(model_type, args, loaders, branch=None):
     """Get a model instance based on the specified type."""
     logger = get_logger(__name__)
     
+    logger.info(f"get_model called with model_type: {model_type}, type: {type(model_type)}")
+    
     if model_type == 'enc_head':
         return _get_enc_head_model(args, loaders, branch)
     elif model_type == 'dual_branch':

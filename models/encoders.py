@@ -140,9 +140,11 @@ class ResMLPEncoder(BaseEncoder):
         hidden: int = 256,
         n_blocks: int = 4,
         dropout: float = 0.1,
-        time_pool: str = "mean",
+        time_pool: str = None,  # Changed default to None
     ):
         super().__init__()
+        self.in_dim = in_dim
+        self.hidden_dim = hidden
         self.pooling = Pooling(in_dim, hidden, mode=time_pool) if time_pool in ["mean", "max", "min", "attn"] else None
 
         stem_in = hidden if self.pooling is not None else in_dim

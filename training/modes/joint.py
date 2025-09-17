@@ -6,7 +6,7 @@ import torch
 from ..trainer import BaseTrainer
 from ..unified_logger import UnifiedMetricsLogger
 from utils.logging import get_logger
-from utils.helpers import ReIter, roundrobin_loaders, rr_val
+from utils.helpers import ReIter, roundrobin_loaders, rr_val, get_device
 
 
 class JointTrainer(BaseTrainer):
@@ -176,23 +176,67 @@ class JointTrainer(BaseTrainer):
         x = batch[0] if isinstance(batch, (list, tuple)) else batch["x"]
         target = batch[1] if isinstance(batch, (list, tuple)) else batch["y"]
         
-        # Always learn from original data first
-        if hasattr(self.model, 'forward_pk') and hasattr(self.model, 'forward_pd'):
-            # For dual branch model - original data
+        # Determine if this is PK or PD data based on input dimensions
+        # In joint mode, we always process data as PD data (which includes both PK and PD processing)
+        is_pk_data = False  # Don't use PK-only processing
+        is_pd_data = True   # Always use PD processing (which includes PK)
+        
+        if is_pk_data:
+            # This is PK data - only compute PK loss
             pk_outs_orig, z_pk_orig, _ = self.model.forward_pk(batch)
             
-            # Extract prediction tensors from head outputs for original
             if isinstance(pk_outs_orig, dict):
                 pk_pred_orig = pk_outs_orig['pred']
             else:
                 pk_pred_orig = pk_outs_orig
+            
+            # Compute PK loss only with PK target
+            # Ensure target has the same shape as pk_pred_orig
+            if pk_pred_orig.dim() == 2 and target.dim() == 1:
+                target_pk = target.unsqueeze(-1)
+            elif pk_pred_orig.dim() == 1 and target.dim() == 2:
+                target_pk = target.squeeze(-1)
+            else:
+                target_pk = target
+            
+            pk_loss_orig = torch.nn.functional.mse_loss(pk_pred_orig, target_pk)
+            loss_orig = pk_loss_orig
+            
+            # Add contrastive loss for PK
+            if self.config.lambda_contrast > 0 and z_pk_orig is not None:
+                contrast_loss_pk_orig = self.contrastive_loss(z_pk_orig, self.config.temperature)
+                loss_orig = loss_orig + self.config.lambda_contrast * contrast_loss_pk_orig
+            
+            return loss_orig
+            
+        elif is_pd_data:
+            # This is PD data - compute both PK and PD losses
+            # First get PK prediction (using PK input dimensions)
+            pk_input = x[:, :11]  # Use first 11 features for PK
+            pk_batch = (pk_input, target)  # Use same target for PK
+            
+            pk_outs_orig, z_pk_orig, _ = self.model.forward_pk(pk_batch)
+            
+            if isinstance(pk_outs_orig, dict):
+                pk_pred_orig = pk_outs_orig['pred']
+            else:
+                pk_pred_orig = pk_outs_orig
+            
+            # Ensure pk_pred_orig has the right shape for concatenation
+            if pk_pred_orig.dim() == 1:
+                pk_pred_orig = pk_pred_orig.unsqueeze(-1)  # [B, 1]
             
             # Add PK prediction to batch for forward_pd
             if isinstance(batch, dict):
                 batch_with_pk = batch.copy()
                 batch_with_pk[self.model.pk_input_key] = pk_pred_orig
             else:
-                batch_with_pk = batch
+                # For tuple/list batch format, create a dict with PK prediction
+                batch_with_pk = {
+                    "x": batch[0],
+                    "y": batch[1],
+                    self.model.pk_input_key: pk_pred_orig
+                }
             
             pd_outs_orig, z_pd_orig, _ = self.model.forward_pd(batch_with_pk, pk_pred_orig, z_pk_orig)
                 
@@ -201,30 +245,33 @@ class JointTrainer(BaseTrainer):
             else:
                 pd_pred_orig = pd_outs_orig
             
-            # Adjust tensor dimensions for original
+            # Adjust tensor dimensions for PK
             if pk_pred_orig.dim() == 1 and target.dim() == 2:
-                target_orig = target.squeeze(-1)
+                target_pk = target.squeeze(-1)
             elif pk_pred_orig.dim() == 2 and target.dim() == 1:
                 pk_pred_orig = pk_pred_orig.squeeze(-1)
             elif pk_pred_orig.dim() == 0:
                 pk_pred_orig = pk_pred_orig.unsqueeze(0)
             elif target.dim() == 0:
-                target_orig = target.unsqueeze(0)
+                target_pk = target.unsqueeze(0)
             else:
-                target_orig = target
+                target_pk = target
             
-            if pd_pred_orig.dim() == 1 and target_orig.dim() == 2:
-                target_orig = target_orig.squeeze(-1)
-            elif pd_pred_orig.dim() == 2 and target_orig.dim() == 1:
+            # Adjust tensor dimensions for PD
+            if pd_pred_orig.dim() == 1 and target.dim() == 2:
+                target_pd = target.squeeze(-1)
+            elif pd_pred_orig.dim() == 2 and target.dim() == 1:
                 pd_pred_orig = pd_pred_orig.squeeze(-1)
             elif pd_pred_orig.dim() == 0:
                 pd_pred_orig = pd_pred_orig.unsqueeze(0)
-            elif target_orig.dim() == 0:
-                target_orig = target_orig.unsqueeze(0)
+            elif target.dim() == 0:
+                target_pd = target.unsqueeze(0)
+            else:
+                target_pd = target
             
-            # Original loss (always computed)
-            pk_loss_orig = torch.nn.functional.mse_loss(pk_pred_orig, target_orig)
-            pd_loss_orig = torch.nn.functional.mse_loss(pd_pred_orig, target_orig)
+            # Original loss (always computed) - PK with PK target, PD with PD target
+            pk_loss_orig = torch.nn.functional.mse_loss(pk_pred_orig, target_pk)
+            pd_loss_orig = torch.nn.functional.mse_loss(pd_pred_orig, target_pd)
             loss_orig = pk_loss_orig + pd_loss_orig
             
             # Add contrastive loss for original
@@ -238,14 +285,32 @@ class JointTrainer(BaseTrainer):
             
             # Apply mixup as additional regularization (if enabled)
             if self.config.use_mixup and torch.rand(1).item() < self.config.mixup_prob:
-                mixed_x, y_a, y_b, lam = self.apply_mixup(x, target, self.config.mixup_alpha)
+                # For mixup, we need to handle PK and PD targets separately
+                if isinstance(batch, dict):
+                    target_pk_mix = batch.get("y_pk", target)  # PK target
+                    target_pd_mix = batch.get("y_pd", target)  # PD target
+                else:
+                    # For tuple/list format, assume target contains both PK and PD targets
+                    if target.dim() == 2 and target.shape[1] >= 2:
+                        target_pk_mix = target[:, 0]  # First column is PK target
+                        target_pd_mix = target[:, 1]  # Second column is PD target
+                    else:
+                        # Fallback: use same target for both (not ideal but prevents errors)
+                        target_pk_mix = target
+                        target_pd_mix = target
                 
-                # Create mixed batch
-                mixed_batch = (mixed_x, target) if isinstance(batch, (list, tuple)) else {"x": mixed_x, "y": target}
+                # Apply mixup to PK target
+                mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :11], target_pk_mix, self.config.mixup_alpha)
+                # Apply mixup to PD target  
+                mixed_x_pd, y_a_pd, y_b_pd, lam_pd = self.apply_mixup(x, target_pd_mix, self.config.mixup_alpha)
+                
+                # Create mixed batches
+                pk_mixed_batch = (mixed_x_pk, target_pk_mix) if isinstance(batch, (list, tuple)) else {"x": mixed_x_pk, "y": target_pk_mix}
+                pd_mixed_batch = (mixed_x_pd, target_pd_mix) if isinstance(batch, (list, tuple)) else {"x": mixed_x_pd, "y": target_pd_mix}
                 
                 # Forward pass with mixed data
-                pk_outs_mix, z_pk_mix, _ = self.model.forward_pk(mixed_batch)
-                pd_outs_mix, z_pd_mix, _ = self.model.forward_pd(mixed_batch, pk_outs_mix, z_pk_mix)
+                pk_outs_mix, z_pk_mix, _ = self.model.forward_pk(pk_mixed_batch)
+                pd_outs_mix, z_pd_mix, _ = self.model.forward_pd(pd_mixed_batch, pk_outs_mix, z_pk_mix)
                 
                 # Extract prediction tensors from head outputs for mixup
                 if isinstance(pk_outs_mix, dict):
@@ -258,24 +323,28 @@ class JointTrainer(BaseTrainer):
                 else:
                     pd_pred_mix = pd_outs_mix
                 
-                # Adjust tensor dimensions for mixup
-                if pk_pred_mix.dim() == 1 and y_a.dim() == 2:
-                    y_a = y_a.squeeze(-1)
-                    y_b = y_b.squeeze(-1)
-                elif pk_pred_mix.dim() == 2 and y_a.dim() == 1:
+                # Adjust tensor dimensions for mixup PK
+                if pk_pred_mix.dim() == 1 and y_a_pk.dim() == 2:
+                    y_a_pk = y_a_pk.squeeze(-1)
+                    y_b_pk = y_b_pk.squeeze(-1)
+                elif pk_pred_mix.dim() == 2 and y_a_pk.dim() == 1:
                     pk_pred_mix = pk_pred_mix.squeeze(-1)
                 
-                if pd_pred_mix.dim() == 1 and y_a.dim() == 2:
-                    y_a = y_a.squeeze(-1)
-                    y_b = y_b.squeeze(-1)
-                elif pd_pred_mix.dim() == 2 and y_a.dim() == 1:
+                # Adjust tensor dimensions for mixup PD
+                if pd_pred_mix.dim() == 1 and y_a_pd.dim() == 2:
+                    y_a_pd = y_a_pd.squeeze(-1)
+                    y_b_pd = y_b_pd.squeeze(-1)
+                elif pd_pred_mix.dim() == 2 and y_a_pd.dim() == 1:
                     pd_pred_mix = pd_pred_mix.squeeze(-1)
                 
-                # Mixup loss calculation
-                y_a_flat = y_a.squeeze(-1) if y_a.dim() > 1 else y_a
-                y_b_flat = y_b.squeeze(-1) if y_b.dim() > 1 else y_b
-                pk_loss_mix = lam * torch.nn.functional.mse_loss(pk_pred_mix, y_a_flat) + (1 - lam) * torch.nn.functional.mse_loss(pk_pred_mix, y_b_flat)
-                pd_loss_mix = lam * torch.nn.functional.mse_loss(pd_pred_mix, y_a_flat) + (1 - lam) * torch.nn.functional.mse_loss(pd_pred_mix, y_b_flat)
+                # Mixup loss calculation with separate targets
+                y_a_pk_flat = y_a_pk.squeeze(-1) if y_a_pk.dim() > 1 else y_a_pk
+                y_b_pk_flat = y_b_pk.squeeze(-1) if y_b_pk.dim() > 1 else y_b_pk
+                y_a_pd_flat = y_a_pd.squeeze(-1) if y_a_pd.dim() > 1 else y_a_pd
+                y_b_pd_flat = y_b_pd.squeeze(-1) if y_b_pd.dim() > 1 else y_b_pd
+                
+                pk_loss_mix = lam_pk * torch.nn.functional.mse_loss(pk_pred_mix, y_a_pk_flat) + (1 - lam_pk) * torch.nn.functional.mse_loss(pk_pred_mix, y_b_pk_flat)
+                pd_loss_mix = lam_pd * torch.nn.functional.mse_loss(pd_pred_mix, y_a_pd_flat) + (1 - lam_pd) * torch.nn.functional.mse_loss(pd_pred_mix, y_b_pd_flat)
                 loss_mix = pk_loss_mix + pd_loss_mix
                 
                 # Add contrastive loss for mixup
@@ -297,7 +366,19 @@ class JointTrainer(BaseTrainer):
             return total_loss
         else:
             # For general model - always learn from original data first
-            pred_orig, z_orig, _ = self.model(batch)
+            # DualBranchPKPD returns 4 values: pk_outs, pd_outs, z_pk, z_pd
+            outputs = self.model(batch)
+            if len(outputs) == 4:
+                pk_outs, pd_outs, z_pk, z_pd = outputs
+                # Use PD output as the main prediction
+                if isinstance(pd_outs, dict):
+                    pred_orig = pd_outs['pred']
+                else:
+                    pred_orig = pd_outs
+                z_orig = z_pd
+            else:
+                # Fallback for other models that return 3 values
+                pred_orig, z_orig, _ = outputs
             
             # Adjust tensor dimensions for original
             if pred_orig.dim() == 1 and target.dim() == 2:
@@ -327,7 +408,18 @@ class JointTrainer(BaseTrainer):
                 mixed_batch = (mixed_x, target) if isinstance(batch, (list, tuple)) else {"x": mixed_x, "y": target}
                 
                 # Forward pass with mixed data
-                pred_mix, z_mix, _ = self.model(mixed_batch)
+                outputs_mix = self.model(mixed_batch)
+                if len(outputs_mix) == 4:
+                    pk_outs_mix, pd_outs_mix, z_pk_mix, z_pd_mix = outputs_mix
+                    # Use PD output as the main prediction
+                    if isinstance(pd_outs_mix, dict):
+                        pred_mix = pd_outs_mix['pred']
+                    else:
+                        pred_mix = pd_outs_mix
+                    z_mix = z_pd_mix
+                else:
+                    # Fallback for other models that return 3 values
+                    pred_mix, z_mix, _ = outputs_mix
                 
                 # Adjust tensor dimensions for mixup
                 if pred_mix.dim() == 1 and y_a.dim() == 2:

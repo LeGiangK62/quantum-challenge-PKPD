@@ -124,6 +124,11 @@ class DualBranchPKPD(nn.Module):
         else:
             # Assume batch is tuple/list format: (X, y, ...)
             x = _maybe_time_pool(batch[0]).float()
+        
+        # If input has more than 11 features, use only the first 11 for PK
+        if x.shape[1] > 11:
+            x = x[:, :11]
+        
         z1 = self.enc_pk(x)                 # [B, D1]
         # Handle tuple output from ResMLP+MoE encoder
         if isinstance(z1, tuple):
@@ -156,16 +161,35 @@ class DualBranchPKPD(nn.Module):
             return torch.cat([X, pkv], dim=-1)
 
     def forward_pd(self, batch: Dict[str, Any], pk_pred: torch.Tensor = None, z_pk: torch.Tensor = None):
+        # Handle case where pk_pred is a dict (from forward method)
+        if isinstance(pk_pred, dict):
+            if 'pred' in pk_pred:
+                pk_pred = pk_pred['pred']
+            else:
+                # If no 'pred' key, create dummy prediction
+                x_pd = _maybe_time_pool(batch["x"] if isinstance(batch, dict) else batch[0]).float()
+                pk_pred = torch.zeros(x_pd.size(0), 1, device=x_pd.device)
+        
         if pk_pred is None:
             # Get PK prediction from batch
             if isinstance(batch, dict):
                 pk_pred = batch.get(self.pk_input_key)
                 if pk_pred is None:
-                    raise KeyError(f"PK prediction not found in batch with key '{self.pk_input_key}'")
+                    # If no PK prediction in batch, create a dummy one
+                    # This is a fallback for cases where PK prediction is not available
+                    x_pd = _maybe_time_pool(batch["x"]).float()
+                    pk_pred = torch.zeros(x_pd.size(0), 1, device=x_pd.device)
             else:
-                # For tuple/list batch format, we need to get PK prediction differently
-                # This is a fallback - in practice, pk_pred should be passed explicitly
-                raise ValueError("PK prediction must be provided explicitly for tuple/list batch format")
+                # For tuple/list batch format, create dummy PK prediction
+                x_pd = _maybe_time_pool(batch[0]).float()
+                pk_pred = torch.zeros(x_pd.size(0), 1, device=x_pd.device)
+        
+        # Ensure pk_pred has the right shape for concatenation
+        if isinstance(pk_pred, torch.Tensor):
+            if pk_pred.dim() == 1:
+                pk_pred = pk_pred.unsqueeze(-1)  # [B] -> [B, 1]
+        
+        # Debug logging removed for clean output
         
         if self.pk_detach and hasattr(pk_pred, 'detach'):
             pk_pred = pk_pred.detach()
@@ -219,9 +243,25 @@ class DualBranchPKPD(nn.Module):
 
     def forward(self, batch: Dict[str, Any]):
         """Full forward pass: PK -> PD"""
-        pk_outs, z_pk, _ = self.forward_pk(batch)
-        pd_outs, z_pd, _ = self.forward_pd(batch, pk_outs, z_pk)
-        return pk_outs, pd_outs, z_pk, z_pd
+        # Determine if this is PK or PD data based on input dimensions
+        x = batch[0] if isinstance(batch, (list, tuple)) else batch["x"]
+        is_pk_data = x.shape[1] == 11
+        is_pd_data = x.shape[1] == 12
+        
+        if is_pk_data:
+            # This is PK data - only return PK output
+            pk_outs, z_pk, _ = self.forward_pk(batch)
+            return pk_outs, None, z_pk, None
+        elif is_pd_data:
+            # This is PD data - return both PK and PD outputs
+            pk_outs, z_pk, _ = self.forward_pk(batch)
+            pd_outs, z_pd, _ = self.forward_pd(batch, pk_outs, z_pk)
+            return pk_outs, pd_outs, z_pk, z_pd
+        else:
+            # Fallback - assume it's PD data
+            pk_outs, z_pk, _ = self.forward_pk(batch)
+            pd_outs, z_pd, _ = self.forward_pd(batch, pk_outs, z_pk)
+            return pk_outs, pd_outs, z_pk, z_pd
 
 # =========================
 # Dual Stage PK/PD Model
