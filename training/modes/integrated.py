@@ -192,11 +192,37 @@ class IntegratedTrainer(BaseTrainer):
             elif is_pd_data:
                 # This is PD data - compute both PK and PD losses
                 # First get PK prediction (using PK input dimensions)
-                pk_input = x[:, :11]  # Use first 11 features for PK
+                # Determine PK input dimension
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pk_input_dim = 11  # With feature engineering: PK uses 11 features
+                else:
+                    pk_input_dim = 7   # Without feature engineering: PK uses 7 features
+                
+                pk_input = x[:, :pk_input_dim]  # Use correct number of features for PK
                 pk_batch = (pk_input, target)  # Use same target for PK
                 
                 pk_outs_orig, z_pk_orig, _ = self.model.forward_pk(pk_batch)
-                pd_outs_orig, z_pd_orig, _ = self.model.forward_pd(batch, pk_outs_orig, z_pk_orig)
+                
+                # Determine PD input dimension
+                # PD encoder expects PD features (12) + PK prediction (1) = 13 total
+                # So we need to extract 12 PD features from the input
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pd_input_dim = 12  # With feature engineering: PD uses 12 features
+                else:
+                    pd_input_dim = 7   # Without feature engineering: PD uses 7 features
+                
+                # Extract PD features only
+                pd_input = x[:, :pd_input_dim]  # Use correct number of features for PD
+                
+                # Create batch with PD features only
+                if isinstance(batch, dict):
+                    pd_batch = batch.copy()
+                    pd_batch["x"] = pd_input  # Use PD features only
+                else:
+                    # For tuple/list batch format, create a new batch with PD features
+                    pd_batch = (pd_input, batch[1]) if len(batch) > 1 else (pd_input,)
+                
+                pd_outs_orig, z_pd_orig, _ = self.model.forward_pd(pd_batch, pk_outs_orig, z_pk_orig)
             
                 # Extract prediction tensors from head outputs for original
                 if isinstance(pk_outs_orig, dict):
@@ -263,10 +289,18 @@ class IntegratedTrainer(BaseTrainer):
                         target_pk_mix = target
                         target_pd_mix = target
                 
+                # Determine dimensions for mixup
+                if hasattr(self.config, 'use_feature_engineering') and self.config.use_feature_engineering:
+                    pk_input_dim_mix = 11  # With feature engineering: PK uses 11 features
+                    pd_input_dim_mix = 12  # With feature engineering: PD uses 12 features
+                else:
+                    pk_input_dim_mix = 7   # Without feature engineering: PK uses 7 features
+                    pd_input_dim_mix = 7   # Without feature engineering: PD uses 7 features
+                
                 # Apply mixup to PK target
-                mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :11], target_pk_mix, self.config.mixup_alpha)
+                mixed_x_pk, y_a_pk, y_b_pk, lam_pk = self.apply_mixup(x[:, :pk_input_dim_mix], target_pk_mix, self.config.mixup_alpha)
                 # Apply mixup to PD target  
-                mixed_x_pd, y_a_pd, y_b_pd, lam_pd = self.apply_mixup(x, target_pd_mix, self.config.mixup_alpha)
+                mixed_x_pd, y_a_pd, y_b_pd, lam_pd = self.apply_mixup(x[:, :pd_input_dim_mix], target_pd_mix, self.config.mixup_alpha)
                 
                 # Create mixed batches
                 pk_mixed_batch = (mixed_x_pk, target_pk_mix) if isinstance(batch, (list, tuple)) else {"x": mixed_x_pk, "y": target_pk_mix}
