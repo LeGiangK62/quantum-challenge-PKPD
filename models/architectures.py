@@ -202,25 +202,42 @@ class DualBranchPKPD(nn.Module):
             x_pd = _maybe_time_pool(batch[0]).float()
         
         if self.concat_mode == "input":
-            # For input concatenation, we need to ensure pk_pred has the right shape
-            if isinstance(pk_pred, dict):
-                pk_pred_tensor = pk_pred['pred']
+            # Determine if this is PK data (11 features) or PD data (12 features)
+            is_pk_data = x_pd.shape[1] == 11
+            is_pd_data = x_pd.shape[1] == 12
+            
+            if is_pk_data:
+                # For PK data, concatenate PK prediction
+                if isinstance(pk_pred, dict):
+                    pk_pred_tensor = pk_pred['pred']
+                else:
+                    pk_pred_tensor = pk_pred
+                
+                # Ensure pk_pred has the same batch size and time dimension as x_pd
+                if pk_pred_tensor.dim() == 1:
+                    pk_pred_tensor = pk_pred_tensor.unsqueeze(-1)  # [B, 1]
+                elif pk_pred_tensor.dim() == 2 and x_pd.dim() == 3:
+                    pk_pred_tensor = pk_pred_tensor.unsqueeze(1).expand(-1, x_pd.size(1), -1)  # [B, T, 1]
+                
+                x_concat = torch.cat([x_pd, pk_pred_tensor], dim=-1)
+                z2 = self.enc_pd(x_concat)
+            elif is_pd_data:
+                # For PD data, don't concatenate PK prediction
+                z2 = self.enc_pd(x_pd)
             else:
-                pk_pred_tensor = pk_pred
-            
-            # Ensure pk_pred has the same batch size and time dimension as x_pd
-            if pk_pred_tensor.dim() == 1:
-                pk_pred_tensor = pk_pred_tensor.unsqueeze(-1)  # [B, 1]
-            elif pk_pred_tensor.dim() == 2 and x_pd.dim() == 3:
-                pk_pred_tensor = pk_pred_tensor.unsqueeze(1).expand(-1, x_pd.size(1), -1)  # [B, T, 1]
-            
-            x_concat = torch.cat([x_pd, pk_pred_tensor], dim=-1)
-            # Debug: Print shapes (remove after fixing)
-            # print(f"DEBUG forward_pd: x_pd.shape = {x_pd.shape}")
-            # print(f"DEBUG forward_pd: pk_pred_tensor.shape = {pk_pred_tensor.shape}")
-            # print(f"DEBUG forward_pd: x_concat.shape = {x_concat.shape}")
-            # print(f"DEBUG forward_pd: self.enc_pd.in_dim = {self.enc_pd.in_dim}")
-            z2 = self.enc_pd(x_concat)
+                # Fallback - assume it's PK data
+                if isinstance(pk_pred, dict):
+                    pk_pred_tensor = pk_pred['pred']
+                else:
+                    pk_pred_tensor = pk_pred
+                
+                if pk_pred_tensor.dim() == 1:
+                    pk_pred_tensor = pk_pred_tensor.unsqueeze(-1)  # [B, 1]
+                elif pk_pred_tensor.dim() == 2 and x_pd.dim() == 3:
+                    pk_pred_tensor = pk_pred_tensor.unsqueeze(1).expand(-1, x_pd.size(1), -1)  # [B, T, 1]
+                
+                x_concat = torch.cat([x_pd, pk_pred_tensor], dim=-1)
+                z2 = self.enc_pd(x_concat)
             # Handle tuple output from ResMLP+MoE encoder
             if isinstance(z2, tuple):
                 z2, aux_loss = z2
