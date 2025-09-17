@@ -315,10 +315,23 @@ class TrainerBasedCompetitionSolver:
             else:
                 return float(prediction)
                 
-        except Exception as e:
-            print(f"Trainer prediction failed: {e}")
-            # Fallback to simple model
+        except (AttributeError, RuntimeError) as e:
+            # Trainer or model not properly loaded
+            self.logger.warning(f"Trainer prediction failed (model issue): {e}")
             return self._simple_biomarker_model(dose, bw, comed)
+        except (ValueError, IndexError) as e:
+            # Feature preparation or tensor conversion issue
+            self.logger.warning(f"Feature processing failed: {e}")
+            return self._simple_biomarker_model(dose, bw, comed)
+        except torch.cuda.OutOfMemoryError as e:
+            # GPU memory issue
+            self.logger.error(f"GPU memory error: {e}")
+            return self._simple_biomarker_model(dose, bw, comed)
+        except Exception as e:
+            # Unexpected error - log and re-raise for debugging
+            self.logger.error(f"Unexpected error in biomarker prediction: {e}")
+            self.logger.error(f"Input parameters: dose={dose}, bw={bw}, comed={comed}, time={time}")
+            raise
     
     def _simple_biomarker_model(self, dose: float, bw: float, comed: int) -> float:
         """Simple fallback model"""

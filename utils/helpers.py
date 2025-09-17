@@ -53,8 +53,6 @@ def build_encoder(encoder_type, input_dim, config):
             variant="adaptive"
         )
     
- - fallback to MLP
-    
     else:
         # Fallback to MLP for unknown encoders
         from models.encoders import MLPEncoder

@@ -54,7 +54,7 @@ class BaseTrainer:
         # Use mixed precision for faster training
         scaler = torch.cuda.amp.GradScaler() if self.device.type == 'cuda' else None
         
-        for batch in train_loader:
+        for batch in train_loader:  # Training loop
             self.optimizer.zero_grad()
             
             # Move batch to device
