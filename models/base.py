@@ -49,9 +49,15 @@ def _get_dual_branch_model(args, loaders):
     def infer_input_dim(loader, branch=None):
         return loader.dataset.tensors[0].shape[1]
     
-    # Get input dimensions
-    F_in_pk = infer_input_dim(loaders["train_pk"])
-    F_in_pd = infer_input_dim(loaders["train_pd"])
+    # Get actual feature dimensions based on feature engineering
+    if hasattr(args, 'use_feature_engineering') and args.use_feature_engineering:
+        # With feature engineering: PK uses 11 features, PD uses 12 features
+        F_in_pk = 11
+        F_in_pd = 12
+    else:
+        # Without feature engineering: PK uses 7 features, PD uses 7 features
+        F_in_pk = 7
+        F_in_pd = 7
     
     # Build encoders and heads
     enc_pk = build_encoder(args.encoder, F_in_pk, args)
