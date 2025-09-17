@@ -23,9 +23,8 @@ def build_encoder(encoder_type, input_dim, config):
     elif encoder_type == "moe":
         from models.encoders import MoEEncoder
         return MoEEncoder(
-            input_dim=input_dim,
-            hidden_dim=config.hidden,
-            num_layers=config.depth,
+            in_dim=input_dim,
+            hidden_dims=[config.hidden] * config.depth,
             num_experts=getattr(config, 'num_experts', 8),
             top_k=getattr(config, 'top_k', 2),
             dropout=config.dropout

@@ -180,13 +180,21 @@ class JointTrainer(BaseTrainer):
         if hasattr(self.model, 'forward_pk') and hasattr(self.model, 'forward_pd'):
             # For dual branch model - original data
             pk_outs_orig, z_pk_orig, _ = self.model.forward_pk(batch)
-            pd_outs_orig, z_pd_orig, _ = self.model.forward_pd(batch, pk_outs_orig, z_pk_orig)
             
             # Extract prediction tensors from head outputs for original
             if isinstance(pk_outs_orig, dict):
                 pk_pred_orig = pk_outs_orig['pred']
             else:
                 pk_pred_orig = pk_outs_orig
+            
+            # Add PK prediction to batch for forward_pd
+            if isinstance(batch, dict):
+                batch_with_pk = batch.copy()
+                batch_with_pk[self.model.pk_input_key] = pk_pred_orig
+            else:
+                batch_with_pk = batch
+            
+            pd_outs_orig, z_pd_orig, _ = self.model.forward_pd(batch_with_pk, pk_pred_orig, z_pk_orig)
                 
             if isinstance(pd_outs_orig, dict):
                 pd_pred_orig = pd_outs_orig['pred']

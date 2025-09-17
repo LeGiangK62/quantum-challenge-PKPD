@@ -155,8 +155,17 @@ class ResMLPEncoder(BaseEncoder):
         self.out_dim = hidden
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 3:
+        if x.dim() == 3 and self.pooling is not None:
             x = self.pooling(x)
+        elif x.dim() == 2 and self.pooling is not None:
+            # For 2D input with pooling, skip pooling and use direct projection
+            # Create a projection layer to match hidden dimension
+            if not hasattr(self, 'input_proj'):
+                self.input_proj = nn.Linear(x.size(-1), self.hidden_dim).to(x.device)
+            x = self.input_proj(x)
+            # Skip stem since we already projected to hidden dimension
+            x = self.blocks(x)
+            return self.final_ln(x)
 
         x = self.stem(x)
         x = self.blocks(x)
@@ -209,11 +218,19 @@ class MoEBlock(nn.Module):
         # Combine expert outputs
         output = torch.zeros_like(x)
         for i in range(self.top_k):
-            expert_idx = top_k_indices[:, i]  # [B]
-            expert_score = top_k_scores[:, i:i+1]  # [B, 1]
+            # Handle both 1D and 2D cases
+            if top_k_indices.dim() == 1:
+                expert_idx = top_k_indices[i:i+1]  # Keep as 1D tensor
+                expert_score = top_k_scores[i:i+1]  # Keep as 1D tensor
+            else:
+                expert_idx = top_k_indices[:, i]  # [B]
+                expert_score = top_k_scores[:, i:i+1]  # [B, 1]
             
             # Gather expert outputs
-            expert_output = torch.stack([expert_outputs[j][b] for b, j in enumerate(expert_idx)])
+            if expert_idx.dim() == 1 and expert_idx.size(0) == 1:  # single sample case
+                expert_output = expert_outputs[expert_idx[0].item()]
+            else:
+                expert_output = torch.stack([expert_outputs[j][b] for b, j in enumerate(expert_idx)])
             output += expert_score * expert_output
         
         # Residual connection
