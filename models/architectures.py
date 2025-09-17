@@ -215,6 +215,11 @@ class DualBranchPKPD(nn.Module):
                 pk_pred_tensor = pk_pred_tensor.unsqueeze(1).expand(-1, x_pd.size(1), -1)  # [B, T, 1]
             
             x_concat = torch.cat([x_pd, pk_pred_tensor], dim=-1)
+            # Debug: Print shapes (remove after fixing)
+            # print(f"DEBUG forward_pd: x_pd.shape = {x_pd.shape}")
+            # print(f"DEBUG forward_pd: pk_pred_tensor.shape = {pk_pred_tensor.shape}")
+            # print(f"DEBUG forward_pd: x_concat.shape = {x_concat.shape}")
+            # print(f"DEBUG forward_pd: self.enc_pd.in_dim = {self.enc_pd.in_dim}")
             z2 = self.enc_pd(x_concat)
             # Handle tuple output from ResMLP+MoE encoder
             if isinstance(z2, tuple):

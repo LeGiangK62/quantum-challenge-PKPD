@@ -62,8 +62,9 @@ def _get_dual_branch_model(args, loaders):
     # Build encoders and heads
     enc_pk = build_encoder(args.encoder, F_in_pk, args)
     # For PD encoder, we need to account for PK prediction concatenation
-    # When concat_mode="input", PD encoder receives F_in_pd + 1 features (PD features + PK prediction)
-    enc_pd = build_encoder(args.encoder, F_in_pd + 1, args)
+    # When concat_mode="input", PD encoder receives F_in_pk + 1 features (PK features + PK prediction)
+    # This is because we use PK data (11 features) + PK prediction (1) = 12 total
+    enc_pd = build_encoder(args.encoder, F_in_pk + 1, args)
     head_pk = build_head(args.head_pk, enc_pk.out_dim, "pk", args)
     head_pd = build_head(args.head_pd, enc_pd.out_dim, "pd", args)
     
