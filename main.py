@@ -175,9 +175,15 @@ def main():
     training_time = time.time() - start_time
     
     logger.info(f"Training completed - Time: {training_time:.2f} seconds")
-    logger.info(f"Best validation loss: {results['best_val_loss']:.6f}")
-    logger.info(f"Best PK RMSE: {results['best_pk_rmse']:.6f}")
-    logger.info(f"Best PD RMSE: {results['best_pd_rmse']:.6f}")
+    
+    # Handle different result structures for different modes
+    if config.mode == "separate":
+        logger.info(f"PK training completed - Best RMSE: {results['pk']['best_rmse']:.6f}")
+        logger.info(f"PD training completed - Best RMSE: {results['pd']['best_rmse']:.6f}")
+    else:
+        logger.info(f"Best validation loss: {results['best_val_loss']:.6f}")
+        logger.info(f"Best PK RMSE: {results['best_pk_rmse']:.6f}")
+        logger.info(f"Best PD RMSE: {results['best_pd_rmse']:.6f}")
     
     # === 7. Results saving ===
     logger.info(f"\n=== 7. Results saving ===")

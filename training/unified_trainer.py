@@ -159,6 +159,13 @@ class UnifiedPKPDTrainer:
         """Main training loop"""
         self.logger.info(f"Training start - Mode: {self.mode}, Epochs: {self.config.epochs}")
         
+        if self.mode == "separate":
+            return self._train_separate_mode()
+        else:
+            return self._train_standard_mode()
+    
+    def _train_standard_mode(self) -> Dict[str, Any]:
+        """Standard training loop for joint, shared, etc. modes"""
         start_time = time.time()
         
         for epoch in range(self.config.epochs):
@@ -214,6 +221,369 @@ class UnifiedPKPDTrainer:
         self.logger.info(f"Training completed - Time: {training_time:.2f} seconds")
         
         return self._get_final_results()
+    
+    def _train_separate_mode(self) -> Dict[str, Any]:
+        """Separate mode training: Train PK completely first, then PD"""
+        start_time = time.time()
+        
+        # Phase 1: Train PK model completely
+        self.logger.info("=== PHASE 1: Training PK Model ===")
+        pk_results = self._train_pk_model()
+        
+        # Phase 2: Train PD model completely
+        self.logger.info("=== PHASE 2: Training PD Model ===")
+        pd_results = self._train_pd_model()
+        
+        training_time = time.time() - start_time
+        self.logger.info(f"Separate training completed - Time: {training_time:.2f} seconds")
+        
+        # Combine results
+        final_results = {
+            'pk': pk_results,
+            'pd': pd_results,
+            'mode': 'separate',
+            'training_time': training_time
+        }
+        
+        return final_results
+    
+    def _train_pk_model(self) -> Dict[str, Any]:
+        """Train PK model completely"""
+        self.logger.info("Starting PK model training...")
+        
+        # Reset best metrics for PK
+        self.best_pk_rmse = float('inf')
+        pk_epochs_without_improvement = 0
+        
+        for epoch in range(self.config.epochs):
+            self.epoch = epoch
+            
+            # Train PK only
+            train_metrics = self._train_pk_epoch()
+            
+            # Validate PK only
+            val_metrics = self._validate_pk_epoch()
+            
+            # Log PK metrics
+            self.logger.info(f"PK Epoch {epoch:3d} | Train | Loss: {train_metrics['pk_loss']:.6f} | RMSE: {train_metrics['pk_rmse']:.6f} | R²: {train_metrics['pk_r2']:.4f}")
+            self.logger.info(f"PK Epoch {epoch:3d} | Valid | Loss: {val_metrics['pk_loss']:.6f} | RMSE: {val_metrics['pk_rmse']:.6f} | R²: {val_metrics['pk_r2']:.4f}")
+            
+            # Check for PK best model
+            if val_metrics['pk_rmse'] < self.best_pk_rmse:
+                self.best_pk_rmse = val_metrics['pk_rmse']
+                self._save_best_model()
+                pk_epochs_without_improvement = 0
+                self.logger.info(f"New PK best model - RMSE: {self.best_pk_rmse:.6f}")
+            else:
+                pk_epochs_without_improvement += 1
+            
+            # Early stopping for PK
+            if pk_epochs_without_improvement >= self.config.patience:
+                self.logger.info(f"PK early stopping - Epoch {epoch}")
+                break
+        
+        self.logger.info(f"PK training completed - Best RMSE: {self.best_pk_rmse:.6f}")
+        return {'best_rmse': self.best_pk_rmse, 'epochs_trained': epoch + 1}
+    
+    def _train_pd_model(self) -> Dict[str, Any]:
+        """Train PD model completely"""
+        self.logger.info("Starting PD model training...")
+        
+        # Reset best metrics for PD
+        self.best_pd_rmse = float('inf')
+        pd_epochs_without_improvement = 0
+        
+        for epoch in range(self.config.epochs):
+            self.epoch = epoch
+            
+            # Train PD only
+            train_metrics = self._train_pd_epoch()
+            
+            # Validate PD only
+            val_metrics = self._validate_pd_epoch()
+            
+            # Log PD metrics
+            self.logger.info(f"PD Epoch {epoch:3d} | Train | Loss: {train_metrics['pd_loss']:.6f} | RMSE: {train_metrics['pd_rmse']:.6f} | R²: {train_metrics['pd_r2']:.4f}")
+            self.logger.info(f"PD Epoch {epoch:3d} | Valid | Loss: {val_metrics['pd_loss']:.6f} | RMSE: {val_metrics['pd_rmse']:.6f} | R²: {val_metrics['pd_r2']:.4f}")
+            
+            # Check for PD best model
+            if val_metrics['pd_rmse'] < self.best_pd_rmse:
+                self.best_pd_rmse = val_metrics['pd_rmse']
+                self._save_best_model()
+                pd_epochs_without_improvement = 0
+                self.logger.info(f"New PD best model - RMSE: {self.best_pd_rmse:.6f}")
+            else:
+                pd_epochs_without_improvement += 1
+            
+            # Early stopping for PD
+            if pd_epochs_without_improvement >= self.config.patience:
+                self.logger.info(f"PD early stopping - Epoch {epoch}")
+                break
+        
+        self.logger.info(f"PD training completed - Best RMSE: {self.best_pd_rmse:.6f}")
+        return {'best_rmse': self.best_pd_rmse, 'epochs_trained': epoch + 1}
+    
+    def _train_pk_epoch(self) -> Dict[str, float]:
+        """Train one epoch for PK only"""
+        self.model.train()
+        pk_loss = 0.0
+        num_batches = 0
+        
+        # Metrics accumulation
+        metrics_sum = {
+            'pk_mse': 0.0, 'pk_rmse': 0.0, 'pk_mae': 0.0, 'pk_r2': 0.0
+        }
+        
+        # Mixed precision settings
+        scaler = torch.cuda.amp.GradScaler() if self.device.type == 'cuda' else None
+        
+        for batch_pk in self.data_loaders['train_pk']:
+            self.optimizer.zero_grad()
+            
+            # Move batch to device
+            batch_pk = self._to_device(batch_pk)
+            
+            # Convert batch to dictionary format
+            if isinstance(batch_pk, (list, tuple)):
+                x_pk, y_pk = batch_pk[0], batch_pk[1]
+                batch_pk_dict = {'x': x_pk, 'y': y_pk}
+            else:
+                batch_pk_dict = batch_pk
+            
+            # Forward pass for PK only
+            if scaler is not None:
+                with torch.cuda.amp.autocast():
+                    loss_dict = self._compute_separate_loss(batch_pk_dict, None)
+                scaler.scale(loss_dict['total']).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+            else:
+                loss_dict = self._compute_separate_loss(batch_pk_dict, None)
+                loss_dict['total'].backward()
+                self.optimizer.step()
+            
+            # Accumulate metrics
+            pk_loss += loss_dict.get('pk', torch.tensor(0.0)).item()
+            num_batches += 1
+            
+            # Calculate PK metrics
+            with torch.no_grad():
+                pk_results = self.model({'pk': batch_pk_dict})
+                pk_pred = pk_results['pk']['pred']
+                pk_target = batch_pk_dict['y'].squeeze(-1)
+                
+                pk_mse = F.mse_loss(pk_pred, pk_target).item()
+                pk_rmse = torch.sqrt(torch.tensor(pk_mse)).item()
+                pk_mae = F.l1_loss(pk_pred, pk_target).item()
+                
+                # R² calculation
+                pk_ss_res = torch.sum((pk_target - pk_pred) ** 2)
+                pk_ss_tot = torch.sum((pk_target - torch.mean(pk_target)) ** 2)
+                pk_r2 = 1 - (pk_ss_res / (pk_ss_tot + 1e-8))
+                
+                metrics_sum['pk_mse'] += pk_mse
+                metrics_sum['pk_rmse'] += pk_rmse
+                metrics_sum['pk_mae'] += pk_mae
+                metrics_sum['pk_r2'] += pk_r2.item()
+        
+        # Average metrics
+        avg_metrics = {
+            'pk_loss': pk_loss / num_batches,
+            'pk_mse': metrics_sum['pk_mse'] / num_batches,
+            'pk_rmse': metrics_sum['pk_rmse'] / num_batches,
+            'pk_mae': metrics_sum['pk_mae'] / num_batches,
+            'pk_r2': metrics_sum['pk_r2'] / num_batches,
+        }
+        
+        return avg_metrics
+    
+    def _train_pd_epoch(self) -> Dict[str, float]:
+        """Train one epoch for PD only"""
+        self.model.train()
+        pd_loss = 0.0
+        num_batches = 0
+        
+        # Metrics accumulation
+        metrics_sum = {
+            'pd_mse': 0.0, 'pd_rmse': 0.0, 'pd_mae': 0.0, 'pd_r2': 0.0
+        }
+        
+        # Mixed precision settings
+        scaler = torch.cuda.amp.GradScaler() if self.device.type == 'cuda' else None
+        
+        for batch_pd in self.data_loaders['train_pd']:
+            self.optimizer.zero_grad()
+            
+            # Move batch to device
+            batch_pd = self._to_device(batch_pd)
+            
+            # Convert batch to dictionary format
+            if isinstance(batch_pd, (list, tuple)):
+                x_pd, y_pd = batch_pd[0], batch_pd[1]
+                batch_pd_dict = {'x': x_pd, 'y': y_pd}
+            else:
+                batch_pd_dict = batch_pd
+            
+            # Forward pass for PD only
+            if scaler is not None:
+                with torch.cuda.amp.autocast():
+                    loss_dict = self._compute_separate_loss(None, batch_pd_dict)
+                scaler.scale(loss_dict['total']).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+            else:
+                loss_dict = self._compute_separate_loss(None, batch_pd_dict)
+                loss_dict['total'].backward()
+                self.optimizer.step()
+            
+            # Accumulate metrics
+            pd_loss += loss_dict.get('pd', torch.tensor(0.0)).item()
+            num_batches += 1
+            
+            # Calculate PD metrics
+            with torch.no_grad():
+                pd_results = self.model({'pd': batch_pd_dict})
+                pd_pred = pd_results['pd']['pred']
+                pd_target = batch_pd_dict['y'].squeeze(-1)
+                
+                pd_mse = F.mse_loss(pd_pred, pd_target).item()
+                pd_rmse = torch.sqrt(torch.tensor(pd_mse)).item()
+                pd_mae = F.l1_loss(pd_pred, pd_target).item()
+                
+                # R² calculation
+                pd_ss_res = torch.sum((pd_target - pd_pred) ** 2)
+                pd_ss_tot = torch.sum((pd_target - torch.mean(pd_target)) ** 2)
+                pd_r2 = 1 - (pd_ss_res / (pd_ss_tot + 1e-8))
+                
+                metrics_sum['pd_mse'] += pd_mse
+                metrics_sum['pd_rmse'] += pd_rmse
+                metrics_sum['pd_mae'] += pd_mae
+                metrics_sum['pd_r2'] += pd_r2.item()
+        
+        # Average metrics
+        avg_metrics = {
+            'pd_loss': pd_loss / num_batches,
+            'pd_mse': metrics_sum['pd_mse'] / num_batches,
+            'pd_rmse': metrics_sum['pd_rmse'] / num_batches,
+            'pd_mae': metrics_sum['pd_mae'] / num_batches,
+            'pd_r2': metrics_sum['pd_r2'] / num_batches,
+        }
+        
+        return avg_metrics
+    
+    def _validate_pk_epoch(self) -> Dict[str, float]:
+        """Validate one epoch for PK only"""
+        self.model.eval()
+        pk_loss = 0.0
+        num_batches = 0
+        
+        # Metrics accumulation
+        metrics_sum = {
+            'pk_mse': 0.0, 'pk_rmse': 0.0, 'pk_mae': 0.0, 'pk_r2': 0.0
+        }
+        
+        with torch.no_grad():
+            for batch_pk in self.data_loaders['val_pk']:
+                batch_pk = self._to_device(batch_pk)
+                
+                # Convert batch to dictionary format
+                if isinstance(batch_pk, (list, tuple)):
+                    x_pk, y_pk = batch_pk[0], batch_pk[1]
+                    batch_pk_dict = {'x': x_pk, 'y': y_pk}
+                else:
+                    batch_pk_dict = batch_pk
+                
+                loss_dict = self._compute_separate_loss(batch_pk_dict, None)
+                
+                pk_loss += loss_dict.get('pk', torch.tensor(0.0)).item()
+                num_batches += 1
+                
+                # Calculate PK metrics
+                pk_results = self.model({'pk': batch_pk_dict})
+                pk_pred = pk_results['pk']['pred']
+                pk_target = batch_pk_dict['y'].squeeze(-1)
+                
+                pk_mse = F.mse_loss(pk_pred, pk_target).item()
+                pk_rmse = torch.sqrt(torch.tensor(pk_mse)).item()
+                pk_mae = F.l1_loss(pk_pred, pk_target).item()
+                
+                # R² calculation
+                pk_ss_res = torch.sum((pk_target - pk_pred) ** 2)
+                pk_ss_tot = torch.sum((pk_target - torch.mean(pk_target)) ** 2)
+                pk_r2 = 1 - (pk_ss_res / (pk_ss_tot + 1e-8))
+                
+                metrics_sum['pk_mse'] += pk_mse
+                metrics_sum['pk_rmse'] += pk_rmse
+                metrics_sum['pk_mae'] += pk_mae
+                metrics_sum['pk_r2'] += pk_r2.item()
+        
+        # Average metrics
+        result = {
+            'pk_loss': pk_loss / num_batches,
+            'pk_mse': metrics_sum['pk_mse'] / num_batches,
+            'pk_rmse': metrics_sum['pk_rmse'] / num_batches,
+            'pk_mae': metrics_sum['pk_mae'] / num_batches,
+            'pk_r2': metrics_sum['pk_r2'] / num_batches,
+        }
+        
+        return result
+    
+    def _validate_pd_epoch(self) -> Dict[str, float]:
+        """Validate one epoch for PD only"""
+        self.model.eval()
+        pd_loss = 0.0
+        num_batches = 0
+        
+        # Metrics accumulation
+        metrics_sum = {
+            'pd_mse': 0.0, 'pd_rmse': 0.0, 'pd_mae': 0.0, 'pd_r2': 0.0
+        }
+        
+        with torch.no_grad():
+            for batch_pd in self.data_loaders['val_pd']:
+                batch_pd = self._to_device(batch_pd)
+                
+                # Convert batch to dictionary format
+                if isinstance(batch_pd, (list, tuple)):
+                    x_pd, y_pd = batch_pd[0], batch_pd[1]
+                    batch_pd_dict = {'x': x_pd, 'y': y_pd}
+                else:
+                    batch_pd_dict = batch_pd
+                
+                loss_dict = self._compute_separate_loss(None, batch_pd_dict)
+                
+                pd_loss += loss_dict.get('pd', torch.tensor(0.0)).item()
+                num_batches += 1
+                
+                # Calculate PD metrics
+                pd_results = self.model({'pd': batch_pd_dict})
+                pd_pred = pd_results['pd']['pred']
+                pd_target = batch_pd_dict['y'].squeeze(-1)
+                
+                pd_mse = F.mse_loss(pd_pred, pd_target).item()
+                pd_rmse = torch.sqrt(torch.tensor(pd_mse)).item()
+                pd_mae = F.l1_loss(pd_pred, pd_target).item()
+                
+                # R² calculation
+                pd_ss_res = torch.sum((pd_target - pd_pred) ** 2)
+                pd_ss_tot = torch.sum((pd_target - torch.mean(pd_target)) ** 2)
+                pd_r2 = 1 - (pd_ss_res / (pd_ss_tot + 1e-8))
+                
+                metrics_sum['pd_mse'] += pd_mse
+                metrics_sum['pd_rmse'] += pd_rmse
+                metrics_sum['pd_mae'] += pd_mae
+                metrics_sum['pd_r2'] += pd_r2.item()
+        
+        # Average metrics
+        result = {
+            'pd_loss': pd_loss / num_batches,
+            'pd_mse': metrics_sum['pd_mse'] / num_batches,
+            'pd_rmse': metrics_sum['pd_rmse'] / num_batches,
+            'pd_mae': metrics_sum['pd_mae'] / num_batches,
+            'pd_r2': metrics_sum['pd_r2'] / num_batches,
+        }
+        
+        return result
     
     def _train_epoch_separate(self) -> Dict[str, float]:
         """Train one epoch for separate mode - PK first, then PD"""
