@@ -18,6 +18,7 @@ A comprehensive machine learning system for Pharmacokinetic/Pharmacodynamic (PK/
 - **MoE**: Mixture of Experts
 - **ResMLP+MoE**: Combined residual and mixture of experts
 - **Adaptive ResMLP+MoE**: Adaptive mixture of experts
+- **CNN**: Convolutional neural network for sequence data
 
 ### **Advanced Techniques**
 - **Mixup Augmentation**: Data augmentation for improved generalization
@@ -115,11 +116,12 @@ python main.py --run_name my_experiment --mode separate --encoder mlp
 - `moe`: Mixture of Experts
 - `resmlp_moe`: Combined ResMLP and MoE
 - `adaptive_resmlp_moe`: Adaptive mixture of experts
+- `cnn`: Convolutional neural network for sequence data
 
 ### **Key Parameters**
 ```bash
 --mode {separate,joint,shared,dual_stage,integrated,two_stage_shared}
---encoder {mlp,resmlp,moe,resmlp_moe,adaptive_resmlp_moe}
+--encoder {mlp,resmlp,moe,resmlp_moe,adaptive_resmlp_moe,cnn}
 --encoder_pk ENCODER_PK    # PK-specific encoder
 --encoder_pd ENCODER_PD    # PD-specific encoder
 --epochs EPOCHS            # Number of training epochs
@@ -136,6 +138,8 @@ python main.py --run_name my_experiment --mode separate --encoder mlp
 --use_mixup                # Enable mixup augmentation
 --lambda_contrast LAMBDA   # Contrastive learning weight
 --temperature TEMP         # Temperature for contrastive learning
+--kernel_size SIZE         # CNN kernel size
+--num_filters FILTERS      # Number of CNN filters
 ```
 
 ## 📊 **Output Structure**

@@ -117,6 +117,17 @@ def build_encoder(encoder_type, input_dim, config):
             variant="adaptive"
         )
     
+    elif encoder_type == "cnn":
+        from models.encoders import CNNEncoder
+        return CNNEncoder(
+            in_dim=input_dim,
+            hidden=config.hidden,
+            depth=config.depth,
+            dropout=config.dropout,
+            kernel_size=getattr(config, 'kernel_size', 3),
+            num_filters=getattr(config, 'num_filters', 64)
+        )
+    
     else:
         # Fallback to MLP for unknown encoders
         from models.encoders import MLPEncoder

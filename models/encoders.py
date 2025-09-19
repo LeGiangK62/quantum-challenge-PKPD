@@ -726,6 +726,76 @@ class DualStageEncoder(BaseEncoder):
         """Forward through back encoder only (for PD)."""
         return self.back_encoder(z)
 
+
+class CNNEncoder(BaseEncoder):
+    """CNN-based encoder for sequence data"""
+    
+    def __init__(
+        self, 
+        in_dim: int, 
+        hidden: int = 64, 
+        depth: int = 3, 
+        dropout: float = 0.1,
+        kernel_size: int = 3,
+        num_filters: int = 64
+    ):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = hidden
+        self.depth = depth
+        self.kernel_size = kernel_size
+        self.num_filters = num_filters
+        
+        # Input projection to create channels
+        self.input_proj = nn.Linear(in_dim, num_filters)
+        
+        # CNN layers
+        self.conv_layers = nn.ModuleList()
+        for i in range(depth):
+            in_channels = num_filters if i == 0 else num_filters
+            self.conv_layers.append(nn.Sequential(
+                nn.Conv1d(in_channels, num_filters, kernel_size, padding=kernel_size//2),
+                nn.BatchNorm1d(num_filters),
+                nn.ReLU(),
+                nn.Dropout(dropout)
+            ))
+        
+        # Global pooling
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        
+        # Final projection
+        self.final_proj = nn.Linear(num_filters, hidden)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size = x.size(0)
+        
+        # Handle 2D input (add sequence dimension)
+        if x.dim() == 2:
+            x = x.unsqueeze(1)  # [batch_size, 1, in_dim]
+        
+        # Input projection
+        x = self.input_proj(x)  # [batch_size, seq_len, num_filters]
+        
+        # Transpose for Conv1d: [batch_size, num_filters, seq_len]
+        x = x.transpose(1, 2)
+        
+        # CNN layers
+        for conv_layer in self.conv_layers:
+            x = conv_layer(x)
+        
+        # Global pooling: [batch_size, num_filters, 1]
+        x = self.global_pool(x)
+        
+        # Flatten: [batch_size, num_filters]
+        x = x.squeeze(-1)
+        
+        # Final projection: [batch_size, hidden]
+        x = self.final_proj(x)
+        x = self.dropout(x)
+        
+        return x
+
 # =========================
 # Factory Functions
 # =========================

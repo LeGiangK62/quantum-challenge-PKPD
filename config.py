@@ -37,6 +37,10 @@ class Config:
     num_experts: int = 4
     top_k: int = 2
     
+    # === CNN settings ===
+    kernel_size: int = 3
+    num_filters: int = 64
+    
     # === Data preprocessing ===
     use_feature_engineering: bool = False
     perkg: bool = False
@@ -91,13 +95,13 @@ def create_argument_parser() -> argparse.ArgumentParser:
     
     # === Model settings ===
     parser.add_argument("--encoder", 
-                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe"], 
+                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn"], 
                        default="mlp", help="Default encoder type")
     parser.add_argument("--encoder_pk", 
-                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe"], 
+                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn"], 
                        default=None, help="PK-specific encoder type")
     parser.add_argument("--encoder_pd", 
-                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe"], 
+                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn"], 
                        default=None, help="PD-specific encoder type")
     parser.add_argument("--head_pk", choices=["mse", "gauss", "poisson"], 
                        default="mse", help="PK head type")
@@ -112,6 +116,10 @@ def create_argument_parser() -> argparse.ArgumentParser:
     # === MoE settings ===
     parser.add_argument("--num_experts", type=int, default=4, help="Number of MoE experts")
     parser.add_argument("--top_k", type=int, default=2, help="Number of top experts to use")
+    
+    # === CNN settings ===
+    parser.add_argument("--kernel_size", type=int, default=3, help="CNN kernel size")
+    parser.add_argument("--num_filters", type=int, default=64, help="Number of CNN filters")
     
     # === Data preprocessing ===
     parser.add_argument("--use_fe", action="store_true", help="Feature engineering")
@@ -187,6 +195,10 @@ def parse_args() -> Config:
         # MoE settings
         num_experts=args.num_experts,
         top_k=args.top_k,
+        
+        # CNN settings
+        kernel_size=args.kernel_size,
+        num_filters=args.num_filters,
         
         # Data preprocessing
         use_feature_engineering=args.use_fe,
