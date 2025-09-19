@@ -74,7 +74,22 @@ class UnifiedPKPDModel(nn.Module):
         
         # PD branch - PD-specific encoder
         pd_encoder_type = self.config.encoder_pd or self.config.encoder
-        self.pd_encoder = self._create_encoder(pd_encoder_type, pd_input_dim)
+        
+        # Adjust input dimensions based on mode
+        if self.mode in ["joint", "dual_stage"]:
+            # PD receives PK prediction as additional feature (+1 dimension)
+            pd_input_dim_with_pk = pd_input_dim + 1
+        elif self.mode == "integrated":
+            # Both PK and PD encoders receive combined PK+PD features
+            combined_input_dim = pk_input_dim + pd_input_dim
+            # Recreate PK encoder with combined input dimension
+            self.pk_encoder = self._create_encoder(pk_encoder_type, combined_input_dim)
+            self.pk_head = self._create_head(self.config.head_pk, self.pk_encoder.out_dim, "pk")
+            pd_input_dim_with_pk = combined_input_dim
+        else:
+            pd_input_dim_with_pk = pd_input_dim
+        
+        self.pd_encoder = self._create_encoder(pd_encoder_type, pd_input_dim_with_pk)
         self.pd_head = self._create_head(self.config.head_pd, self.pd_encoder.out_dim, "pd")
         
         # Save encoder information for logging
@@ -177,14 +192,26 @@ class UnifiedPKPDModel(nn.Module):
         return results
     
     def _forward_dual_branch(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        """Dual branch mode forward"""
+        """Dual branch mode forward - different logic for joint/dual_stage/integrated"""
+        results = {}
+        
+        if self.mode == "joint":
+            return self._forward_joint(batch)
+        elif self.mode == "dual_stage":
+            return self._forward_dual_stage(batch)
+        elif self.mode == "integrated":
+            return self._forward_integrated(batch)
+        else:
+            raise ValueError(f"Unknown dual branch mode: {self.mode}")
+    
+    def _forward_joint(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Joint mode: PK and PD trained together with PK info passed to PD"""
         results = {}
         
         # PK branch
         if 'pk' in batch:
             x_pk = batch['pk']['x']
             encoder_output = self.pk_encoder(x_pk)
-            # Handle tuple output from ResMLPMoEEncoder
             if isinstance(encoder_output, tuple):
                 z_pk, aux_loss = encoder_output
             else:
@@ -196,11 +223,37 @@ class UnifiedPKPDModel(nn.Module):
                 'outs': pk_outs
             }
         
-        # PD branch
+        # PD branch with PK information
         if 'pd' in batch:
             x_pd = batch['pd']['x']
-            encoder_output = self.pd_encoder(x_pd)
-            # Handle tuple output from ResMLPMoEEncoder
+            
+            # Add PK prediction as additional feature to PD input
+            if 'pk' in results:
+                pk_pred = results['pk']['pred'].detach()  # Detach to prevent gradient flow
+                # Ensure PK prediction has the same batch size as PD input
+                if pk_pred.size(0) != x_pd.size(0):
+                    # If batch sizes don't match, use zero padding for missing samples
+                    if pk_pred.size(0) < x_pd.size(0):
+                        # Pad PK prediction with zeros
+                        if pk_pred.dim() == 1:
+                            padding = torch.zeros(x_pd.size(0) - pk_pred.size(0), device=x_pd.device)
+                        else:
+                            padding = torch.zeros(x_pd.size(0) - pk_pred.size(0), pk_pred.size(1), device=x_pd.device)
+                        pk_pred = torch.cat([pk_pred, padding], dim=0)
+                    else:
+                        # Truncate PK prediction
+                        pk_pred = pk_pred[:x_pd.size(0)]
+                # Concatenate PK prediction to PD input
+                if pk_pred.dim() == 1:
+                    x_pd_with_pk = torch.cat([x_pd, pk_pred.unsqueeze(-1)], dim=-1)
+                else:
+                    x_pd_with_pk = torch.cat([x_pd, pk_pred], dim=-1)
+            else:
+                # If no PK prediction available, use zero padding
+                pk_pred = torch.zeros(x_pd.size(0), 1, device=x_pd.device)
+                x_pd_with_pk = torch.cat([x_pd, pk_pred], dim=-1)
+            
+            encoder_output = self.pd_encoder(x_pd_with_pk)
             if isinstance(encoder_output, tuple):
                 z_pd, aux_loss = encoder_output
             else:
@@ -212,10 +265,110 @@ class UnifiedPKPDModel(nn.Module):
                 'outs': pd_outs
             }
         
-        # Joint mode: pass PK information to PD
-        if self.mode == "joint" and 'pk' in results and 'pd' in results:
-            pk_info = self.pk_to_pd_proj(results['pk']['z'])
-            # Add PK information to PD (implementation depends on the need)
+        return results
+    
+    def _forward_dual_stage(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Dual stage mode: PK first, then PD with PK information"""
+        results = {}
+        
+        # Stage 1: PK prediction
+        if 'pk' in batch:
+            x_pk = batch['pk']['x']
+            encoder_output = self.pk_encoder(x_pk)
+            if isinstance(encoder_output, tuple):
+                z_pk, aux_loss = encoder_output
+            else:
+                z_pk = encoder_output
+            pk_outs = self.pk_head(z_pk, batch['pk'])
+            results['pk'] = {
+                'pred': pk_outs['pred'],
+                'z': z_pk,
+                'outs': pk_outs
+            }
+        
+        # Stage 2: PD prediction using PK information
+        if 'pd' in batch:
+            x_pd = batch['pd']['x']
+            
+            # Use PK prediction as additional feature
+            if 'pk' in results:
+                pk_pred = results['pk']['pred']
+                # Ensure PK prediction has the same batch size as PD input
+                if pk_pred.size(0) != x_pd.size(0):
+                    # If batch sizes don't match, use zero padding for missing samples
+                    if pk_pred.size(0) < x_pd.size(0):
+                        # Pad PK prediction with zeros
+                        if pk_pred.dim() == 1:
+                            padding = torch.zeros(x_pd.size(0) - pk_pred.size(0), device=x_pd.device)
+                        else:
+                            padding = torch.zeros(x_pd.size(0) - pk_pred.size(0), pk_pred.size(1), device=x_pd.device)
+                        pk_pred = torch.cat([pk_pred, padding], dim=0)
+                    else:
+                        # Truncate PK prediction
+                        pk_pred = pk_pred[:x_pd.size(0)]
+                # Concatenate PK prediction to PD input
+                if pk_pred.dim() == 1:
+                    x_pd_with_pk = torch.cat([x_pd, pk_pred.unsqueeze(-1)], dim=-1)
+                else:
+                    x_pd_with_pk = torch.cat([x_pd, pk_pred], dim=-1)
+            else:
+                # If no PK prediction available, use zero padding
+                pk_pred = torch.zeros(x_pd.size(0), 1, device=x_pd.device)
+                x_pd_with_pk = torch.cat([x_pd, pk_pred], dim=-1)
+            
+            encoder_output = self.pd_encoder(x_pd_with_pk)
+            if isinstance(encoder_output, tuple):
+                z_pd, aux_loss = encoder_output
+            else:
+                z_pd = encoder_output
+            pd_outs = self.pd_head(z_pd, batch['pd'])
+            results['pd'] = {
+                'pred': pd_outs['pred'],
+                'z': z_pd,
+                'outs': pd_outs
+            }
+        
+        return results
+    
+    def _forward_integrated(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Integrated mode: PK and PD features combined from the start"""
+        results = {}
+        
+        # Combine PK and PD features
+        if 'pk' in batch and 'pd' in batch:
+            x_pk = batch['pk']['x']
+            x_pd = batch['pd']['x']
+            
+            # Handle different batch sizes by using the smaller one
+            min_batch_size = min(x_pk.size(0), x_pd.size(0))
+            x_pk = x_pk[:min_batch_size]
+            x_pd = x_pd[:min_batch_size]
+            
+            # Concatenate PK and PD features
+            x_combined = torch.cat([x_pk, x_pd], dim=-1)
+            
+            # Use PK encoder for combined features
+            encoder_output = self.pk_encoder(x_combined)
+            if isinstance(encoder_output, tuple):
+                z_combined, aux_loss = encoder_output
+            else:
+                z_combined = encoder_output
+            
+            # PK prediction
+            pk_outs = self.pk_head(z_combined, batch['pk'])
+            results['pk'] = {
+                'pred': pk_outs['pred'],
+                'z': z_combined,
+                'outs': pk_outs
+            }
+            
+            # PD prediction
+            pd_outs = self.pd_head(z_combined, batch['pd'])
+            results['pd'] = {
+                'pred': pd_outs['pred'],
+                'z': z_combined,
+                'outs': pd_outs
+            }
         
         return results
     
