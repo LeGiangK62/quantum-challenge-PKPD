@@ -52,9 +52,10 @@ class UnifiedPKPDModel(nn.Module):
             'head': pk_head
         })
         
-        # PD model - PD-specific encoder
+        # PD model - PD-specific encoder with PK prediction input (+1 dimension)
         pd_encoder_type = self.config.encoder_pd or self.config.encoder
-        pd_encoder = self._create_encoder(pd_encoder_type, pd_input_dim)
+        pd_input_dim_with_pk = pd_input_dim + 1  # PK prediction adds 1 dimension
+        pd_encoder = self._create_encoder(pd_encoder_type, pd_input_dim_with_pk)
         pd_head = self._create_head(self.config.head_pd, pd_encoder.out_dim, "pd")
         self.pd_model = nn.ModuleDict({
             'encoder': pd_encoder,
@@ -80,9 +81,9 @@ class UnifiedPKPDModel(nn.Module):
             # PD receives PK prediction as additional feature (+1 dimension)
             pd_input_dim_with_pk = pd_input_dim + 1
         elif self.mode == "integrated":
-            # Integrated mode: PK and PD use separate encoders but share information through training
-            # Keep original input dimensions
-            pd_input_dim_with_pk = pd_input_dim
+            # Integrated mode: PD encoder receives PK encoder output
+            # PD encoder input dimension = PK encoder output dimension
+            pd_input_dim_with_pk = self.pk_encoder.out_dim
         else:
             pd_input_dim_with_pk = pd_input_dim
         
@@ -114,15 +115,19 @@ class UnifiedPKPDModel(nn.Module):
             self.pd_proj = nn.Linear(pd_input_dim, shared_input_dim)
     
     def _build_two_stage_shared_model(self, pk_input_dim: int, pd_input_dim: int):
-        """Two-stage shared mode: 2-stage shared model"""
+        """Two-stage shared mode: One shared encoder used in 2 stages"""
+        # Shared encoder (used in both stages)
+        self.shared_encoder = self._create_encoder(self.config.encoder, pk_input_dim)
+        
         # Stage 1: PK prediction
-        self.stage1_encoder = self._create_encoder(self.config.encoder, pk_input_dim)
-        self.stage1_head = self._create_head(self.config.head_pk, self.stage1_encoder.out_dim, "pk")
+        self.stage1_head = self._create_head(self.config.head_pk, self.shared_encoder.out_dim, "pk")
         
         # Stage 2: PD prediction (PK information included)
-        stage2_input_dim = pd_input_dim + 1  # PD features + PK prediction
-        self.stage2_encoder = self._create_encoder(self.config.encoder, stage2_input_dim)
-        self.stage2_head = self._create_head(self.config.head_pd, self.stage2_encoder.out_dim, "pd")
+        # PD input dimension = PD features + PK prediction
+        stage2_input_dim = pd_input_dim + 1
+        # Projection layer to map PD input to PK input dimension for shared encoder
+        self.pd_to_pk_proj = nn.Linear(stage2_input_dim, pk_input_dim)
+        self.stage2_head = self._create_head(self.config.head_pd, self.shared_encoder.out_dim, "pd")
     
     def _create_encoder(self, encoder_type: str, input_dim: int) -> BaseEncoder:
         """Create encoder"""
@@ -153,9 +158,10 @@ class UnifiedPKPDModel(nn.Module):
             raise ValueError(f"Unknown mode: {self.mode}")
     
     def _forward_separate(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        """Separate mode forward"""
+        """Separate mode forward - PK first, then PD with PK prediction"""
         results = {}
         
+        # Step 1: PK prediction
         if 'pk' in batch:
             x_pk = batch['pk']['x']
             encoder_output = self.pk_model['encoder'](x_pk)
@@ -171,9 +177,35 @@ class UnifiedPKPDModel(nn.Module):
                 'outs': pk_outs
             }
         
+        # Step 2: PD prediction with PK information
         if 'pd' in batch:
             x_pd = batch['pd']['x']
-            encoder_output = self.pd_model['encoder'](x_pd)
+            
+            # Add PK prediction to PD input
+            if 'pk' in results:
+                pk_pred = results['pk']['pred']
+                # Convert PK prediction to correct dimension
+                if pk_pred.dim() == 1:
+                    pk_pred = pk_pred.unsqueeze(-1)  # [B] -> [B, 1]
+                
+                # Handle batch size mismatch
+                if pk_pred.size(0) != x_pd.size(0):
+                    if pk_pred.size(0) < x_pd.size(0):
+                        # Pad PK prediction with zeros
+                        padding = torch.zeros(x_pd.size(0) - pk_pred.size(0), pk_pred.size(1), device=x_pd.device)
+                        pk_pred = torch.cat([pk_pred, padding], dim=0)
+                    else:
+                        # Truncate PK prediction
+                        pk_pred = pk_pred[:x_pd.size(0)]
+                
+                x_pd_with_pk = torch.cat([x_pd, pk_pred], dim=-1)
+            else:
+                # If PK prediction is not available, fill with 0
+                batch_size = x_pd.size(0)
+                zero_pk = torch.zeros(batch_size, 1, device=x_pd.device)
+                x_pd_with_pk = torch.cat([x_pd, zero_pk], dim=-1)
+            
+            encoder_output = self.pd_model['encoder'](x_pd_with_pk)
             # Handle tuple output from ResMLPMoEEncoder
             if isinstance(encoder_output, tuple):
                 z_pd, aux_loss = encoder_output
@@ -328,10 +360,10 @@ class UnifiedPKPDModel(nn.Module):
         return results
     
     def _forward_integrated(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        """Integrated mode: PK and PD features combined from the start"""
+        """Integrated mode: PK encoder output (z_pk) is used as input to PD encoder"""
         results = {}
         
-        # Process PK and PD separately but with shared representation
+        # Step 1: PK processing
         if 'pk' in batch:
             x_pk = batch['pk']['x']
             encoder_output = self.pk_encoder(x_pk)
@@ -346,9 +378,32 @@ class UnifiedPKPDModel(nn.Module):
                 'outs': pk_outs
             }
         
+        # Step 2: PD processing with PK encoder output (z_pk)
         if 'pd' in batch:
             x_pd = batch['pd']['x']
-            encoder_output = self.pd_encoder(x_pd)
+            
+            # Use PK encoder output (z_pk) as input to PD encoder
+            if 'pk' in results:
+                z_pk = results['pk']['z']  # PK encoder output
+                
+                # Handle batch size mismatch
+                if z_pk.size(0) != x_pd.size(0):
+                    if z_pk.size(0) < x_pd.size(0):
+                        # Pad z_pk with zeros
+                        padding = torch.zeros(x_pd.size(0) - z_pk.size(0), z_pk.size(1), device=x_pd.device)
+                        z_pk = torch.cat([z_pk, padding], dim=0)
+                    else:
+                        # Truncate z_pk
+                        z_pk = z_pk[:x_pd.size(0)]
+                
+                # Use z_pk as input to PD encoder
+                encoder_output = self.pd_encoder(z_pk)
+            else:
+                # If PK encoder output is not available, use zero input
+                batch_size = x_pd.size(0)
+                zero_input = torch.zeros(batch_size, self.pd_encoder.in_dim, device=x_pd.device)
+                encoder_output = self.pd_encoder(zero_input)
+            
             if isinstance(encoder_output, tuple):
                 z_pd, aux_loss = encoder_output
             else:
@@ -403,26 +458,26 @@ class UnifiedPKPDModel(nn.Module):
         return results
     
     def _forward_two_stage_shared(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        """Two-stage shared mode forward"""
+        """Two-stage shared mode: One shared encoder used in 2 stages"""
         results = {}
         
-        # Stage 1: PK prediction
+        # Stage 1: PK prediction using shared encoder
         if 'pk' in batch:
             x_pk = batch['pk']['x']
-            encoder_output = self.stage1_encoder(x_pk)
+            encoder_output = self.shared_encoder(x_pk)
             # Handle tuple output from ResMLPMoEEncoder
             if isinstance(encoder_output, tuple):
-                z1, aux_loss = encoder_output
+                z_shared, aux_loss = encoder_output
             else:
-                z1 = encoder_output
-            pk_outs = self.stage1_head(z1, batch['pk'])
+                z_shared = encoder_output
+            pk_outs = self.stage1_head(z_shared, batch['pk'])
             results['pk'] = {
                 'pred': pk_outs['pred'],
-                'z': z1,
+                'z': z_shared,
                 'outs': pk_outs
             }
         
-        # Stage 2: PD prediction (PK information included)
+        # Stage 2: PD prediction using same shared encoder
         if 'pd' in batch:
             x_pd = batch['pd']['x']
             # Add PK prediction result to PD input
@@ -449,16 +504,19 @@ class UnifiedPKPDModel(nn.Module):
                 zero_pk = torch.zeros(batch_size, 1, device=x_pd.device)
                 x_pd_with_pk = torch.cat([x_pd, zero_pk], dim=-1)
             
-            encoder_output = self.stage2_encoder(x_pd_with_pk)
+            # Project PD input to PK input dimension for shared encoder
+            x_pd_projected = self.pd_to_pk_proj(x_pd_with_pk)
+            # Use same shared encoder for PD
+            encoder_output = self.shared_encoder(x_pd_projected)
             # Handle tuple output from ResMLPMoEEncoder
             if isinstance(encoder_output, tuple):
-                z2, aux_loss = encoder_output
+                z_shared_pd, aux_loss = encoder_output
             else:
-                z2 = encoder_output
-            pd_outs = self.stage2_head(z2, batch['pd'])
+                z_shared_pd = encoder_output
+            pd_outs = self.stage2_head(z_shared_pd, batch['pd'])
             results['pd'] = {
                 'pred': pd_outs['pred'],
-                'z': z2,
+                'z': z_shared_pd,
                 'outs': pd_outs
             }
         
