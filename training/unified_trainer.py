@@ -233,7 +233,8 @@ class UnifiedPKPDTrainer:
         scaler = torch.cuda.amp.GradScaler() if self.device.type == 'cuda' else None
         
         # Phase 1: Train PK model
-        self.logger.debug("Training PK model...")
+        self.logger.info("=== Phase 1: Training PK Model ===")
+        pk_batch_count = 0
         for batch_pk in self.data_loaders['train_pk']:
             self.optimizer.zero_grad()
             
@@ -283,9 +284,14 @@ class UnifiedPKPDTrainer:
                 metrics_sum['pk_rmse'] += pk_rmse
                 metrics_sum['pk_mae'] += pk_mae
                 metrics_sum['pk_r2'] += pk_r2.item()
+            
+            pk_batch_count += 1
+        
+        self.logger.info(f"PK training completed - Processed {pk_batch_count} batches")
         
         # Phase 2: Train PD model
-        self.logger.debug("Training PD model...")
+        self.logger.info("=== Phase 2: Training PD Model ===")
+        pd_batch_count = 0
         for batch_pd in self.data_loaders['train_pd']:
             self.optimizer.zero_grad()
             
@@ -335,6 +341,10 @@ class UnifiedPKPDTrainer:
                 metrics_sum['pd_rmse'] += pd_rmse
                 metrics_sum['pd_mae'] += pd_mae
                 metrics_sum['pd_r2'] += pd_r2.item()
+            
+            pd_batch_count += 1
+        
+        self.logger.info(f"PD training completed - Processed {pd_batch_count} batches")
         
         # Average metrics
         avg_metrics = {
@@ -456,6 +466,7 @@ class UnifiedPKPDTrainer:
         
         with torch.no_grad():
             # Validate PK model
+            self.logger.debug("Validating PK model...")
             for batch_pk in self.data_loaders['val_pk']:
                 batch_pk = self._to_device(batch_pk)
                 
@@ -492,6 +503,7 @@ class UnifiedPKPDTrainer:
                 metrics_sum['pk_r2'] += pk_r2.item()
             
             # Validate PD model
+            self.logger.debug("Validating PD model...")
             for batch_pd in self.data_loaders['val_pd']:
                 batch_pd = self._to_device(batch_pd)
                 
