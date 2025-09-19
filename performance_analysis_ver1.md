@@ -82,5 +82,3 @@
 - **moe-moe**: Good performance with shared mode
 - **resmlp_moe**: Competitive with joint mode
 - **adaptive_resmlp_moe**: Limited data but shows potential
-
-**Results saved to: /workspace/combo_performance_analysis.csv** 📁
