@@ -1,11 +1,7 @@
 """
-Training module
+Training package
 """
 
-from .trainer import BaseTrainer
-from .modes import *
+from .unified_trainer import UnifiedPKPDTrainer
 
-__all__ = [
-    "BaseTrainer",
-    "SeparateTrainer", "JointTrainer", "SharedTrainer", "DualStageTrainer"
-]
+__all__ = ["UnifiedPKPDTrainer"]

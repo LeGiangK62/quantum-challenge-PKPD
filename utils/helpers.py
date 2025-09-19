@@ -5,10 +5,74 @@ Helper functions for PK/PD modeling
 import torch
 import numpy as np
 from typing import Dict, List, Tuple, Optional
+from datetime import datetime
 
 # Additional utility functions
 import os
 from pathlib import Path
+
+
+def generate_run_name(config) -> str:
+    """
+    Generate a descriptive run name based on configuration
+    
+    Args:
+        config: Configuration object with training parameters
+        
+    Returns:
+        str: Generated run name in format: mode_encoder_s{seed}_{timestamp}_{features}
+    """
+    # Create human-readable timestamp (YYMMDD_HHMM)
+    timestamp = datetime.now().strftime("%y%m%d_%H%M")
+    
+    # Determine encoder name for run name
+    if config.encoder_pk or config.encoder_pd:
+        # Different encoders for PK and PD
+        pk_encoder = config.encoder_pk or config.encoder
+        pd_encoder = config.encoder_pd or config.encoder
+        encoder_name = f"{pk_encoder}-{pd_encoder}"
+    else:
+        # Same encoder for both
+        encoder_name = config.encoder
+    
+    # Create postfix based on configuration (only add if features are enabled)
+    postfix_parts = []
+    
+    # Feature engineering
+    if getattr(config, 'use_feature_engineering', False):
+        postfix_parts.append("fe")
+    
+    # Mixup augmentation
+    if getattr(config, 'use_mixup', False):
+        postfix_parts.append("mixup")
+    
+    # Contrastive learning
+    if getattr(config, 'use_contrast', False):
+        postfix_parts.append("contrast")
+    
+    # Uncertainty quantification
+    if getattr(config, 'use_uncertainty', False):
+        postfix_parts.append("uncertainty")
+    
+    # Active learning
+    if getattr(config, 'use_active_learning', False):
+        postfix_parts.append("active")
+    
+    # Meta learning
+    if getattr(config, 'use_meta_learning', False):
+        postfix_parts.append("meta")
+    
+    # Only add postfix if there are enabled features
+    postfix = "_".join(postfix_parts) if postfix_parts else ""
+    
+    # Create clean run name
+    if postfix:
+        run_name = f"{config.mode}_{encoder_name}_s{config.random_state}_{timestamp}_{postfix}"
+    else:
+        run_name = f"{config.mode}_{encoder_name}_s{config.random_state}_{timestamp}"
+    
+    return run_name
+
 
 def build_encoder(encoder_type, input_dim, config):
     """Build encoder"""
@@ -31,8 +95,8 @@ def build_encoder(encoder_type, input_dim, config):
         )
     
     elif encoder_type == "resmlp_moe":
-        from models.resmlp_moe_encoder import create_resmlp_moe_encoder
-        return create_resmlp_moe_encoder(
+        from models.encoders import create_resmlp_moe_encoder
+        encoder = create_resmlp_moe_encoder(
             in_dim=input_dim,
             hidden_dim=config.hidden,
             num_layers=config.depth,
@@ -40,9 +104,10 @@ def build_encoder(encoder_type, input_dim, config):
             top_k=getattr(config, 'top_k', 2),
             variant="standard"
         )
+        return encoder
     
     elif encoder_type == "adaptive_resmlp_moe":
-        from models.resmlp_moe_encoder import create_resmlp_moe_encoder
+        from models.encoders import create_resmlp_moe_encoder
         return create_resmlp_moe_encoder(
             in_dim=input_dim,
             hidden_dim=config.hidden,
@@ -57,10 +122,16 @@ def build_encoder(encoder_type, input_dim, config):
         from models.encoders import MLPEncoder
         return MLPEncoder(input_dim, config.hidden, config.depth, config.dropout)
 
-def build_head(head_type, hidden_dim, for_branch, config):
+def build_head(head_type, hidden_dim):
     """Build head"""
-    from models.heads import MSEHead
-    return MSEHead(hidden_dim)
+    # TODO: Add more heads
+    if head_type == "mse":
+        from models.heads import MSEHead
+        return MSEHead(hidden_dim)
+    else:
+        from models.heads import MSEHead
+        return MSEHead(hidden_dim)
+
 
 def scaling_and_prepare_loader(data, features, batch_size, lambda_ctr, target_col, num_workers, pin_memory, drop_last_train):
     """Prepare data loader"""
@@ -198,3 +269,35 @@ def get_device(device_id=0):
 def count_parameters(model):
     """Calculate number of parameters in the model"""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def get_feature_dimensions(config, branch="pk", pk_features=None, pd_features=None):
+    """Get feature dimensions based on configuration and branch"""
+    if hasattr(config, 'use_feature_engineering') and config.use_feature_engineering:
+        # Use actual feature counts if provided
+        if pk_features is not None and pd_features is not None:
+            if branch == "pk":
+                return len(pk_features)
+            elif branch == "pd":
+                return len(pd_features)
+            else:
+                return len(pd_features)  # Default to PD dimensions
+        else:
+            # Fallback to estimated counts (will be updated dynamically)
+            if branch == "pk":
+                return 25  # Estimated: basic features + window features + per-kg features
+            elif branch == "pd":
+                return 26  # Estimated: PK features + PD_BASELINE
+            else:
+                return 26  # Default to PD dimensions
+    else:
+        return 7  # Without feature engineering: both PK and PD use 7 features
+
+def get_pk_input_dim(config):
+    """Get PK input dimension"""
+    return get_feature_dimensions(config, "pk")
+
+
+def get_pd_input_dim(config):
+    """Get PD input dimension"""
+    return get_feature_dimensions(config, "pd")

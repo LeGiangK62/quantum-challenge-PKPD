@@ -1,16 +1,7 @@
 """
-Model definition module
+Models package
 """
 
-from .encoders import *
-from .heads import *
-from .architectures import *
+from .unified_model import UnifiedPKPDModel
 
-__all__ = [
-    # Encoders
-    "MLPEncoder", "ResMLPEncoder", "MoEEncoder", "DualStageEncoder", "SimpleMLPEncoder",
-    # Heads  
-    "MSEHead", "GaussianNLLHead", "PoissonHead", "EmaxHead",
-    # Architectures
-    "EncHeadModel", "DualBranchPKPD", "SharedEncModel", "DualStagePKPDModel"
-]
+__all__ = ["UnifiedPKPDModel"]

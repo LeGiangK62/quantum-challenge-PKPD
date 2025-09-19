@@ -27,11 +27,11 @@ def setup_logging(log_dir: str = "results/logs", verbose: bool = False, run_name
         root_logger = logging.getLogger()
         root_logger.handlers.clear()
         
-        # File handler with run_name as filename
+        # File handler with timestamped filename
+        timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
         if run_name:
-            log_filename = f"{run_name}.log"
+            log_filename = f"{run_name}_{timestamp}.log"
         else:
-            timestamp = datetime.now().strftime('%H%M%S')
             log_filename = f"run_{timestamp}.log"
         log_file = Path(log_dir) / log_filename
         file_handler = logging.FileHandler(log_file, encoding='utf-8')

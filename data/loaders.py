@@ -27,6 +27,98 @@ def load_estdata(path: str = "EstData.csv", *, standardize_cols: bool = True) ->
     return df, df_obs, df_dose
 
 # =========================================================
+# Time window analysis and selection
+# =========================================================
+def analyze_dose_patterns(dose_df: pd.DataFrame) -> dict:
+    """Analyze dose patterns to determine optimal time windows"""
+    if dose_df.empty:
+        return {"avg_interval": 24, "max_interval": 48, "dose_frequency": "daily"}
+    
+    # Calculate dose intervals per subject
+    dose_intervals = []
+    for subject_id, subject_doses in dose_df.groupby('ID'):
+        times = subject_doses['TIME'].sort_values()
+        intervals = times.diff().dropna()
+        dose_intervals.extend(intervals.tolist())
+    
+    if not dose_intervals:
+        return {"avg_interval": 24, "max_interval": 48, "dose_frequency": "daily"}
+    
+    avg_interval = np.mean(dose_intervals)
+    max_interval = np.max(dose_intervals)
+    median_interval = np.median(dose_intervals)
+    
+    # Determine dose frequency pattern
+    if avg_interval < 8:
+        frequency = "frequent"  # 8 hours apart
+    elif avg_interval < 16:
+        frequency = "twice_daily"  # 12 hours apart
+    elif avg_interval < 32:
+        frequency = "daily"  # 24 hours apart
+    else:
+        frequency = "sparse"  # 32 hours apart
+    
+    return {
+        "avg_interval": avg_interval,
+        "max_interval": max_interval,
+        "median_interval": median_interval,
+        "dose_frequency": frequency,
+        "dose_intervals": dose_intervals
+    }
+
+def get_optimal_time_windows(dose_df: pd.DataFrame, custom_windows: list = None) -> list:
+    """Get optimal time windows based on data analysis or custom settings"""
+    
+    if custom_windows is not None:
+        return custom_windows
+    
+    # Default windows for EstData.csv (24 hours apart)
+    default_windows = [24, 48, 72, 96, 120, 144, 168]
+    
+    # If no dose data, return default
+    if dose_df.empty:
+        print(f"No dose data found, using default windows: {default_windows}")
+        return default_windows
+    
+    # Analyze dose patterns
+    pattern_info = analyze_dose_patterns(dose_df)
+    avg_interval = pattern_info["avg_interval"]
+    max_interval = pattern_info["max_interval"]
+    frequency = pattern_info["dose_frequency"]
+    
+    print(f"Dose pattern analysis: avg_interval={avg_interval:.2f}h, frequency={frequency}")
+    
+    # Select windows based on analysis
+    if frequency == "frequent":  # 8 hours apart
+        windows = [6, 12, 24, 48, 72]
+    elif frequency == "twice_daily":  # 12 hours apart
+        windows = [12, 24, 48, 72, 96]
+    elif frequency == "daily":  # 24 hours apart
+        windows = [24, 48, 72, 96, 120, 144, 168]
+    elif frequency == "sparse":  # 32 hours apart
+        windows = [24, 48, 72, 96, 120, 144, 168, 240, 336]  # Maximum 2 weeks
+    else:
+        # Default fallback (EstData.csv)
+        windows = default_windows
+    
+    # Adjust windows based on actual data
+    # For daily dosing (24h), allow up to 1 week (168h) for cumulative effects
+    if frequency == "daily" and avg_interval == 24.0:
+        # Keep all daily windows up to 1 week for cumulative effects
+        max_reasonable_window = 168  # 1 week
+    else:
+        # For other patterns, use 3x max interval
+        max_reasonable_window = max_interval * 3
+    
+    windows = [w for w in windows if w <= max_reasonable_window]
+    
+    # Ensure we have at least 3 windows
+    if len(windows) < 3:
+        windows = default_windows
+    
+    return sorted(windows)
+
+# =========================================================
 # FE: dose history -> additional features (leakage-safe)
 # =========================================================
 def features_from_dose_history(
@@ -35,7 +127,8 @@ def features_from_dose_history(
     add_pk_baseline: bool = False,
     add_pd_delta: bool = False,   
     target: str = "dv",           
-    allow_future_dose: bool = False  
+    allow_future_dose: bool = False,
+    time_windows: list = None  # New parameter for custom time windows
 ) -> pd.DataFrame:
     required_obs = {"ID", "TIME", "DV", "DVID"}
     required_dose = {"ID", "TIME", "AMT"}
@@ -57,10 +150,16 @@ def features_from_dose_history(
         for i, d in dose_df.groupby("ID", sort=False)
     }
 
+    # Get optimal time windows
+    optimal_windows = get_optimal_time_windows(dose_df, time_windows)
+    print(f"Using time windows: {optimal_windows} hours")
+    
     tsld_list, last_amt_list = [], []
     ndose_list, cumdose_list = [], []
     ttnext_list = []
-    sum24_list, sum48_list, sum168_list = [], [], []
+    
+    # Dynamic window sum lists
+    window_sum_lists = {f"sum{int(w)}h": [] for w in optimal_windows}
 
     def window_sum(d_times, csum, t_start, t_end):
         """Cumulative dose in the window (t_start, t_end], inclusive on right."""
@@ -81,11 +180,11 @@ def features_from_dose_history(
             last_amt_list += [0.0] * n
             ndose_list += [0] * n
             cumdose_list += [0.0] * n
-
             ttnext_list += [np.nan] * n
-            sum24_list += [0.0] * n
-            sum48_list += [0.0] * n
-            sum168_list += [0.0] * n
+            
+            # Initialize all window sum lists with zeros
+            for window_key in window_sum_lists:
+                window_sum_lists[window_key] += [0.0] * n
             continue
 
         dmat = dose_by_id[i]
@@ -118,29 +217,31 @@ def features_from_dose_history(
             else:
                 ttnext = np.nan
 
-            # rolling dose sums over past windows
-            sum24 = window_sum(d_times, csum, t - 24.0, t)
-            sum48 = window_sum(d_times, csum, t - 48.0, t)
-            sum168 = window_sum(d_times, csum, t - 168.0, t)
+            # rolling dose sums over past windows (dynamic)
+            for window in optimal_windows:
+                window_key = f"sum{int(window)}h"
+                window_sum_value = window_sum(d_times, csum, t - window, t)
+                window_sum_lists[window_key].append(window_sum_value)
 
             tsld_list.append(tsld)
             last_amt_list.append(last_amt)
             ndose_list.append(ndoses)
             cumdose_list.append(cumdose)
             ttnext_list.append(ttnext)
-            sum24_list.append(sum24)
-            sum48_list.append(sum48)
-            sum168_list.append(sum168)
 
     # Assign engineered columns
     out["TSLD"] = tsld_list
     out["LAST_DOSE_AMT"] = last_amt_list
     out["N_DOSES_UP_TO_T"] = ndose_list
     out["CUM_DOSE_UP_TO_T"] = cumdose_list
-    out["DOSE_SUM_PREV24H"] = sum24_list
-    out["DOSE_SUM_PREV48H"] = sum48_list
-    out["DOSE_SUM_PREV168H"] = sum168_list
     out["TIME_TO_NEXT_DOSE"] = ttnext_list  # may be NaN if allow_future_dose=False
+    
+    # Assign dynamic window sum columns
+    for window_key, window_values in window_sum_lists.items():
+        # Extract hour value from key (e.g., "sum24h" -> "24H")
+        hour_value = window_key.replace("sum", "").replace("h", "H")
+        column_name = f"DOSE_SUM_PREV{hour_value}"
+        out[column_name] = window_values
 
     # Baselines: computed as first DV per (ID, DVID) after sorting by time
     base_by_id_dvid = (
@@ -173,7 +274,8 @@ def use_feature_engineering(
     *,
     target: str = "dv", # 'dv' or 'delta'
     use_pd_baseline_for_dv: bool = True,
-    allow_future_dose: bool = False
+    allow_future_dose: bool = False,
+    time_windows: list = None  # New parameter for custom time windows
 ):
     """
     Build engineered dataframe and return (df_final, pk_features, pd_features).
@@ -185,15 +287,21 @@ def use_feature_engineering(
         add_pk_baseline=False,
         add_pd_delta=(str(target).lower() == "delta"),   # compute PD_DELTA only if target='delta'
         target=target,
-        allow_future_dose=allow_future_dose
+        allow_future_dose=allow_future_dose,
+        time_windows=time_windows  # Pass time windows parameter
     )
 
     # Base feature pool (no target columns here)
     base_feats = [
         'BW', 'COMED', 'DOSE', 'TIME',
-        'TSLD', 'LAST_DOSE_AMT', 'N_DOSES_UP_TO_T', 'CUM_DOSE_UP_TO_T',
-        'DOSE_SUM_PREV24H', 'DOSE_SUM_PREV48H', 'DOSE_SUM_PREV168H'
+        'TSLD', 'LAST_DOSE_AMT', 'N_DOSES_UP_TO_T', 'CUM_DOSE_UP_TO_T'
     ]
+    
+    # Add dynamic window sum features (extract from df_final columns)
+    window_features = [col for col in df_final.columns if col.startswith('DOSE_SUM_PREV') and col.endswith('H')]
+    base_feats.extend(window_features)
+    print(f"  + window features added: {window_features}")
+    
     if allow_future_dose:
         base_feats.append('TIME_TO_NEXT_DOSE')
 
@@ -207,10 +315,11 @@ def use_feature_engineering(
     # Optional per-kg features for both PK/PD
     if use_perkg:
         bw = df_final['BW'].replace(0, np.nan)
-        perkg_cols = [
-            'DOSE', 'LAST_DOSE_AMT', 'CUM_DOSE_UP_TO_T',
-            'DOSE_SUM_PREV24H', 'DOSE_SUM_PREV48H', 'DOSE_SUM_PREV168H'
-        ]
+        perkg_cols = ['DOSE', 'LAST_DOSE_AMT', 'CUM_DOSE_UP_TO_T']
+        
+        # Add dynamic window sum columns to per-kg features
+        perkg_cols.extend(window_features)
+        
         added = []
         for col in perkg_cols:
             if col in df_final.columns:
