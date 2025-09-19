@@ -759,34 +759,62 @@ class UnifiedPKPDTrainer:
         
         # Select mode-specific data loaders
         train_loaders = self._get_train_loaders()
+        pk_loader, pd_loader = train_loaders
         
-        for batch_pk, batch_pd in zip(*train_loaders):
+        # Process PK and PD batches independently (like separate mode)
+        pk_batches = list(pk_loader)
+        pd_batches = list(pd_loader)
+        
+        # Process all PK batches
+        for batch_pk in pk_batches:
             self.optimizer.zero_grad()
             
             # Move batch to device
             batch_pk = self._to_device(batch_pk)
-            batch_pd = self._to_device(batch_pd)
             
-            # Forward pass
+            # Forward pass for PK only
             if scaler is not None:
                 with torch.cuda.amp.autocast():
-                    loss_dict = self._compute_loss(batch_pk, batch_pd)
+                    loss_dict = self._compute_loss(batch_pk, None)
                 scaler.scale(loss_dict['total']).backward()
                 scaler.step(self.optimizer)
                 scaler.update()
             else:
-                loss_dict = self._compute_loss(batch_pk, batch_pd)
+                loss_dict = self._compute_loss(batch_pk, None)
                 loss_dict['total'].backward()
                 self.optimizer.step()
             
             # Metrics accumulation
             total_loss += loss_dict['total'].item()
             pk_loss += loss_dict.get('pk', 0.0)
+            num_batches += 1
+        
+        # Process all PD batches
+        for batch_pd in pd_batches:
+            self.optimizer.zero_grad()
+            
+            # Move batch to device
+            batch_pd = self._to_device(batch_pd)
+            
+            # Forward pass for PD only
+            if scaler is not None:
+                with torch.cuda.amp.autocast():
+                    loss_dict = self._compute_loss(None, batch_pd)
+                scaler.scale(loss_dict['total']).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+            else:
+                loss_dict = self._compute_loss(None, batch_pd)
+                loss_dict['total'].backward()
+                self.optimizer.step()
+            
+            # Metrics accumulation
+            total_loss += loss_dict['total'].item()
             pd_loss += loss_dict.get('pd', 0.0)
             num_batches += 1
             
             # Metrics calculation (only last batch)
-            if num_batches == len(list(zip(*train_loaders))):
+            if num_batches == len(pk_batches) + len(pd_batches):
                 # Convert batch to dictionary
                 batch_dict = {}
                 if batch_pk is not None:

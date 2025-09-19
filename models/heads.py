@@ -86,9 +86,15 @@ class BaseHead(nn.Module):
 # =========================
 
 class MSEHead(BaseHead):
-    def __init__(self, in_dim: int):
+    def __init__(self, in_dim: int, dropout: float = 0.0):
         super().__init__()
-        self.mean = nn.Linear(in_dim, 1)
+        if dropout > 0:
+            self.mean = nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(in_dim, 1)
+            )
+        else:
+            self.mean = nn.Linear(in_dim, 1)
 
     def forward(self, z: torch.Tensor, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         mu = self.mean(z).squeeze(-1)
@@ -263,3 +269,5 @@ class EmaxHead(BaseHead):
                        "EC50_mean": float(outputs["EC50"].mean().item()),
                        "n_mean": float(outputs["n"].mean().item())}
         return loss, metrics
+
+

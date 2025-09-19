@@ -127,21 +127,21 @@ def build_encoder(encoder_type, input_dim, config):
             kernel_size=getattr(config, 'kernel_size', 3),
             num_filters=getattr(config, 'num_filters', 64)
         )
-    
     else:
         # Fallback to MLP for unknown encoders
         from models.encoders import MLPEncoder
         return MLPEncoder(input_dim, config.hidden, config.depth, config.dropout)
 
-def build_head(head_type, hidden_dim):
+def build_head(head_type, hidden_dim, config=None):
     """Build head"""
-    # TODO: Add more heads
     if head_type == "mse":
         from models.heads import MSEHead
-        return MSEHead(hidden_dim)
+        dropout_rate = config.mc_dropout_rate if config and config.use_mc_dropout else 0.0
+        return MSEHead(hidden_dim, dropout_rate)
     else:
         from models.heads import MSEHead
-        return MSEHead(hidden_dim)
+        dropout_rate = config.mc_dropout_rate if config and config.use_mc_dropout else 0.0
+        return MSEHead(hidden_dim, dropout_rate)
 
 
 def scaling_and_prepare_loader(data, features, batch_size, lambda_ctr, target_col, num_workers, pin_memory, drop_last_train):

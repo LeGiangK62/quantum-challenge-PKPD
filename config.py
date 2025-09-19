@@ -41,6 +41,11 @@ class Config:
     kernel_size: int = 3
     num_filters: int = 64
     
+    # === Uncertainty Quantification ===
+    use_mc_dropout: bool = False
+    mc_dropout_rate: float = 0.2
+    mc_samples: int = 50
+    
     # === Data preprocessing ===
     use_feature_engineering: bool = False
     perkg: bool = False
@@ -144,6 +149,11 @@ def create_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val_size", type=float, default=0.1, help="Validation set size")
     parser.add_argument("--random_state", type=int, default=42, help="Random seed")
     
+    # === Uncertainty Quantification ===
+    parser.add_argument("--use_mc_dropout", action="store_true", help="Use Monte Carlo Dropout for uncertainty quantification")
+    parser.add_argument("--mc_dropout_rate", type=float, default=0.2, help="Dropout rate for MC Dropout")
+    parser.add_argument("--mc_samples", type=int, default=10, help="Number of MC samples for uncertainty estimation")
+    
     # === Output settings ===
     parser.add_argument("--out_dir", default="results", help="Result output directory")
     parser.add_argument("--run_name", help="Run name (auto-generated)")
@@ -199,6 +209,11 @@ def parse_args() -> Config:
         # CNN settings
         kernel_size=args.kernel_size,
         num_filters=args.num_filters,
+        
+        # Uncertainty Quantification
+        use_mc_dropout=args.use_mc_dropout,
+        mc_dropout_rate=args.mc_dropout_rate,
+        mc_samples=args.mc_samples,
         
         # Data preprocessing
         use_feature_engineering=args.use_fe,

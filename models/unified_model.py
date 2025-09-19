@@ -137,7 +137,7 @@ class UnifiedPKPDModel(nn.Module):
     def _create_head(self, head_type: str, input_dim: int, branch: str) -> BaseHead:
         """Create head"""
         from utils.helpers import build_head
-        return build_head(head_type, input_dim)
+        return build_head(head_type, input_dim, self.config)
     
     def _setup_joint_connections(self): 
         """Joint mode: setup PK-PD connections"""
@@ -545,3 +545,49 @@ class UnifiedPKPDModel(nn.Module):
             info['pd_parameters'] = sum(p.numel() for p in self.pd_model.parameters() if p.requires_grad)
         
         return info
+    
+    def predict_with_uncertainty(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Predict with uncertainty using Monte Carlo Dropout
+        
+        This method enables dropout during inference and performs multiple forward passes
+        to estimate prediction uncertainty. The model should have dropout layers for this to work.
+        """
+        if not self.config.use_mc_dropout:
+            raise ValueError("MCDropout is not enabled. Set use_mc_dropout=True in config.")
+        
+        # Enable dropout for uncertainty estimation
+        self.train()  # This enables dropout layers
+        
+        results = {}
+        n_samples = self.config.mc_samples
+        
+        for branch in ['pk', 'pd']:
+            if branch in batch:
+                # Collect multiple predictions
+                predictions = []
+                
+                for _ in range(n_samples):
+                    # Forward pass with dropout enabled
+                    branch_results = self.forward({branch: batch[branch]})
+                    pred = branch_results[branch]['pred']
+                    predictions.append(pred.detach())
+                
+                # Stack predictions: [n_samples, batch_size]
+                predictions = torch.stack(predictions, dim=0)
+                
+                # Calculate statistics
+                mean_pred = predictions.mean(dim=0)
+                std_pred = predictions.std(dim=0)
+                confidence_interval = 1.96 * std_pred  # 95% confidence interval
+                
+                results[branch] = {
+                    'pred': mean_pred,
+                    'std': std_pred,
+                    'confidence_interval': confidence_interval,
+                    'all_predictions': predictions
+                }
+        
+        # Disable dropout after uncertainty estimation
+        self.eval()
+        
+        return results

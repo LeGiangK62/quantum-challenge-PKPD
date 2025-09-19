@@ -250,11 +250,13 @@ def features_from_dose_history(
            .transform(lambda s: s.iloc[0] if len(s) else np.nan)
     )
 
-    # PD baseline/delta only on PD rows (DVID==2)
-    out["PD_BASELINE"] = np.where(out["DVID"].eq(2), base_by_id_dvid, np.nan)
+    # PD baseline/delta removed to avoid data leakage for new participants
+    # PD_BASELINE causes data leakage as it requires future knowledge of participant's first measurement
     if add_pd_delta:
-        # Safe because we assert target!='dv' above
+        # For delta target, we need baseline - but this should be used carefully
+        out["PD_BASELINE"] = np.where(out["DVID"].eq(2), base_by_id_dvid, np.nan)
         out["PD_DELTA"] = np.where(out["DVID"].eq(2), out["DV"] - out["PD_BASELINE"], np.nan)
+        print("WARNING: PD_DELTA target uses PD_BASELINE which may cause data leakage!")
 
     # Optional PK baseline/delta only on PK rows (DVID==1) — not used as features by default
     if add_pk_baseline:
@@ -262,6 +264,72 @@ def features_from_dose_history(
         out["PK_DELTA"] = np.where(out["DVID"].eq(1), out["DV"] - out["PK_BASELINE"], np.nan)
 
     return out
+
+
+def add_population_baseline(df_obs: pd.DataFrame, baseline_type: str = "median", baseline_value: float = None) -> pd.DataFrame:
+    """
+    Add population-based baseline for new participants.
+    This avoids data leakage by using population statistics instead of individual baselines.
+    
+    Args:
+        df_obs: Observed data dataframe
+        baseline_type: "median", "mean", or "mode" for population baseline calculation
+        baseline_value: Pre-computed baseline value (for inference)
+    
+    Returns:
+        DataFrame with population baseline added
+    """
+    out = df_obs.copy()
+    
+    # Calculate or use provided population baseline for PD (DVID==2)
+    pd_data = out[out['DVID'] == 2]
+    if not pd_data.empty:
+        if baseline_value is not None:
+            # Use provided baseline value (for inference)
+            pop_pd_baseline = baseline_value
+            print(f"Using provided population PD baseline: {pop_pd_baseline:.4f}")
+        else:
+            # Calculate baseline from data (for training)
+            if baseline_type == "median":
+                pop_pd_baseline = pd_data['DV'].median()
+            elif baseline_type == "mean":
+                pop_pd_baseline = pd_data['DV'].mean()
+            elif baseline_type == "mode":
+                pop_pd_baseline = pd_data['DV'].mode().iloc[0] if not pd_data['DV'].mode().empty else pd_data['DV'].median()
+            else:
+                pop_pd_baseline = pd_data['DV'].median()
+            print(f"Calculated population PD baseline ({baseline_type}): {pop_pd_baseline:.4f}")
+        
+        # Add population baseline for all PD observations
+        out["PD_POPULATION_BASELINE"] = np.where(out["DVID"].eq(2), pop_pd_baseline, np.nan)
+    
+    return out
+
+
+def calculate_population_baseline(df_obs: pd.DataFrame, baseline_type: str = "median") -> float:
+    """
+    Calculate population baseline value for saving/loading.
+    
+    Args:
+        df_obs: Observed data dataframe
+        baseline_type: "median", "mean", or "mode" for population baseline calculation
+    
+    Returns:
+        Population baseline value
+    """
+    pd_data = df_obs[df_obs['DVID'] == 2]
+    if pd_data.empty:
+        return 0.0
+    
+    if baseline_type == "median":
+        return float(pd_data['DV'].median())
+    elif baseline_type == "mean":
+        return float(pd_data['DV'].mean())
+    elif baseline_type == "mode":
+        mode_result = pd_data['DV'].mode()
+        return float(mode_result.iloc[0]) if not mode_result.empty else float(pd_data['DV'].median())
+    else:
+        return float(pd_data['DV'].median())
 
 
 # =========================================================
@@ -273,7 +341,6 @@ def use_feature_engineering(
     use_perkg: bool,
     *,
     target: str = "dv", # 'dv' or 'delta'
-    use_pd_baseline_for_dv: bool = True,
     allow_future_dose: bool = False,
     time_windows: list = None  # New parameter for custom time windows
 ):
@@ -308,10 +375,11 @@ def use_feature_engineering(
     pk_features = base_feats.copy()
     pd_features = base_feats.copy()
 
-    if str(target).lower() == 'dv' and use_pd_baseline_for_dv:
-        if 'PD_BASELINE' in df_final.columns:
-            pd_features.append('PD_BASELINE')
-
+    # PD_BASELINE removed to avoid data leakage for new participants
+    # Use other features like BW, COMED, DOSE, TIME, TSLD, etc. instead
+    print("PD_BASELINE feature removed to prevent data leakage for new participants.")
+    print("Using other available features: BW, COMED, DOSE, TIME, TSLD, dose history, etc.")
+    
     # Optional per-kg features for both PK/PD
     if use_perkg:
         bw = df_final['BW'].replace(0, np.nan)

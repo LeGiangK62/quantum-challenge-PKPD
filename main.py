@@ -86,7 +86,6 @@ def main():
             df_obs=df_obs, df_dose=df_dose,
             use_perkg=config.perkg,
             target="dv",
-            use_pd_baseline_for_dv=True,
             allow_future_dose=config.allow_future_dose,
             time_windows=config.time_windows
         )
