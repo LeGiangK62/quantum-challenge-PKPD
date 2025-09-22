@@ -1442,10 +1442,10 @@ class UnifiedPKPDTrainer:
         # Loss history recording
         self.training_history['train_loss'].append(train_metrics['total_loss'])
         self.training_history['val_loss'].append(val_metrics['total_loss'])
-        self.training_history['pk_train_loss'].append(train_metrics.get('pk_loss', 0.0))
-        self.training_history['pd_train_loss'].append(train_metrics.get('pd_loss', 0.0))
-        self.training_history['pk_val_loss'].append(val_metrics.get('pk_loss', 0.0))
-        self.training_history['pd_val_loss'].append(val_metrics.get('pd_loss', 0.0))
+        self.training_history['pk_train_loss'].append(train_metrics.get('pk_loss', 0.0).detach().item())
+        self.training_history['pd_train_loss'].append(train_metrics.get('pd_loss', 0.0).detach().item())
+        self.training_history['pk_val_loss'].append(val_metrics.get('pk_loss', 0.0).detach().item())
+        self.training_history['pd_val_loss'].append(val_metrics.get('pd_loss', 0.0).detach().item())
         
         # Metrics history recording
         for metric in ['mse', 'rmse', 'mae', 'r2']:
