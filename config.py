@@ -100,13 +100,22 @@ def create_argument_parser() -> argparse.ArgumentParser:
     
     # === Model settings ===
     parser.add_argument("--encoder", 
-                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn"], 
+                       choices=[
+                           "mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn",
+                           'resqnn_moe'
+                        ],  
                        default="mlp", help="Default encoder type")
     parser.add_argument("--encoder_pk", 
-                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn"], 
+                       choices=[
+                           "mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn",
+                           'resqnn_moe'
+                        ],  
                        default=None, help="PK-specific encoder type")
     parser.add_argument("--encoder_pd", 
-                       choices=["mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn"], 
+                       choices=[
+                           "mlp", "resmlp", "moe", "resmlp_moe", "adaptive_resmlp_moe", "cnn",
+                           'resqnn_moe'
+                        ],  
                        default=None, help="PD-specific encoder type")
     parser.add_argument("--head_pk", choices=["mse", "gauss", "poisson"], 
                        default="mse", help="PK head type")

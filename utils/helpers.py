@@ -117,6 +117,18 @@ def build_encoder(encoder_type, input_dim, config):
             variant="adaptive"
         )
     
+    elif encoder_type == "resqnn_moe":
+        from models.encoders import create_resmlp_moe_encoder
+        encoder = create_resmlp_moe_encoder(
+            in_dim=input_dim,
+            hidden_dim=config.hidden,
+            num_layers=config.depth,
+            num_experts=getattr(config, 'num_experts', 8),
+            top_k=getattr(config, 'top_k', 2),
+            variant="quantum"
+        )
+        return encoder
+    
     elif encoder_type == "cnn":
         from models.encoders import CNNEncoder
         return CNNEncoder(

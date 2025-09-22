@@ -40,7 +40,7 @@ class UnifiedPKPDTrainer:
         
         # Learning rate scheduler
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', patience=config.patience//2, factor=0.5, verbose=True
+            self.optimizer, mode='min', patience=config.patience//2, factor=0.5
         )
         
         # Model save directory
