@@ -7,7 +7,7 @@ import torch.nn as nn
 
 
 class qnn_basic(nn.Module):
-    def __init__(self, input_dim, output_dim, n_qubits=8, n_layers=4, 
+    def __init__(self, input_dim, output_dim, n_qubits=8, n_layers=1, 
                  dev_name="default.qubit", readout_axes="XYZ"):
         super().__init__()
 
@@ -31,8 +31,8 @@ class qnn_basic(nn.Module):
             for l in range(self.n_layers):
                 # Data re-uploading 
                 # qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="Z") # Z cause errors?
-                # qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="X") 
-                qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="Y") 
+                qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="Y")
+                qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="X")
                 qml.StronglyEntanglingLayers(weights[l:l+1], wires=range(self.n_qubits))
 
             # Multi-basis readout
