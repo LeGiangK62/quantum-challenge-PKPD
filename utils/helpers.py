@@ -102,7 +102,9 @@ def build_encoder(encoder_type, input_dim, config):
             num_layers=config.depth,
             num_experts=getattr(config, 'num_experts', 8),
             top_k=getattr(config, 'top_k', 2),
-            variant="standard"
+            variant="standard",
+            n_qubits=config.n_qubits,
+            n_layers=config.n_layers
         )
         return encoder
     

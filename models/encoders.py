@@ -808,7 +808,9 @@ def create_resmlp_moe_encoder(
     num_layers: int = 6,
     num_experts: int = 8,
     top_k: int = 2,
-    variant: str = "standard"
+    variant: str = "standard",
+    n_qubits: int = 8, 
+    n_layers: int = 2
 ) -> ResMLPMoEEncoder:
     """
     Factory function to create ResMLP + MoE encoders
@@ -835,7 +837,9 @@ def create_resmlp_moe_encoder(
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             num_experts=num_experts,
-            top_k=top_k
+            top_k=top_k,
+            n_qubits=n_qubits, 
+            n_layers=n_layers
         )
     else:
         return ResMLPMoEEncoder(
@@ -854,9 +858,10 @@ class ResidualQNNBlock(nn.Module):
         hidden_dim: int,
         mlp_ratio: float = 4.0,
         dropout: float = 0.1,
-        activation: str = "gelu"
+        activation: str = "gelu",
+        n_qubits=8, n_layers=2
     ):
-        super().__init__()
+        super().__init__()   
         
         self.hidden_dim = hidden_dim
         self.mlp_ratio = mlp_ratio
@@ -869,10 +874,10 @@ class ResidualQNNBlock(nn.Module):
         # MLP layers
         mlp_hidden = int(hidden_dim * mlp_ratio)
         self.mlp = nn.Sequential(
-            qnn_basic(hidden_dim, mlp_hidden),
+            qnn_basic(hidden_dim, mlp_hidden, n_qubits, n_layers),
             self._get_activation(activation),
             nn.Dropout(dropout),
-            qnn_basic(mlp_hidden, hidden_dim),
+            qnn_basic(mlp_hidden, hidden_dim, n_qubits, n_layers),
             nn.Dropout(dropout)
         )
         
@@ -912,7 +917,9 @@ class ResQNNMoEBlock(nn.Module):
         top_k: int = 2,
         mlp_ratio: float = 4.0,
         dropout: float = 0.1,
-        activation: str = "gelu"
+        activation: str = "gelu",
+        n_qubits: int = 8, 
+        n_layers: int = 2
     ):
         super().__init__()
         
@@ -920,7 +927,9 @@ class ResQNNMoEBlock(nn.Module):
             hidden_dim=hidden_dim,
             mlp_ratio=mlp_ratio,
             dropout=dropout,
-            activation=activation
+            activation=activation,
+            n_qubits=n_qubits, 
+            n_layers=n_layers
         )
         
         self.moe = AdvancedMoEBlock(
@@ -965,7 +974,9 @@ class ResQNNMoEEncoder(BaseEncoder):
         activation: str = "gelu",
         time_pool: Optional[str] = None,  # "mean"/"max"/"attn"/None
         use_input_projection: bool = True,
-        use_output_projection: bool = True
+        use_output_projection: bool = True,
+        n_qubits: int = 8, 
+        n_layers: int = 2
     ):
         super().__init__()
         
@@ -993,7 +1004,9 @@ class ResQNNMoEEncoder(BaseEncoder):
                 top_k=top_k,
                 mlp_ratio=mlp_ratio,
                 dropout=dropout,
-                activation=activation
+                activation=activation,
+                n_qubits=n_qubits,
+                n_layers=n_layers
             ) for _ in range(num_layers)
         ])
         

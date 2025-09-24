@@ -25,6 +25,10 @@ def create_model(config, loaders, pk_features, pd_features):
         logger.info(f"Encoder settings - PK: {pk_encoder}, PD: {pd_encoder}")
     else:
         logger.info(f"Encoder settings - Common: {pk_encoder}")
+        
+    if 'qnn' in pk_encoder:
+        if config.n_qubits:
+            logger.info(f"Quantum Settings: {config.n_qubits} qubits, {config.n_layers} layers")
     
     # Create unified model
     model = UnifiedPKPDModel(

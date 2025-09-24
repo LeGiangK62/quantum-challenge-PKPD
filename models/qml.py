@@ -7,10 +7,9 @@ import torch.nn as nn
 
 
 class qnn_basic(nn.Module):
-    def __init__(self, input_dim, output_dim, n_qubits=8, n_layers=1, 
+    def __init__(self, input_dim, output_dim, n_qubits=8, n_layers=2, 
                  dev_name="default.qubit", readout_axes="XYZ"):
         super().__init__()
-
         self.n_qubits = n_qubits
         self.n_layers = n_layers
         self.output_dim = output_dim
@@ -21,6 +20,7 @@ class qnn_basic(nn.Module):
 
         # Compute readout dimension (3 * n_qubits if XYZ, etc.)
         readout_dim = n_qubits * len(readout_axes)
+        # readout_dim = n_qubits
         self.out = nn.Linear(readout_dim, output_dim)
 
         # PennyLane device
@@ -34,6 +34,7 @@ class qnn_basic(nn.Module):
                 qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="Y")
                 qml.AngleEmbedding(inputs, wires=range(self.n_qubits), rotation="X")
                 qml.StronglyEntanglingLayers(weights[l:l+1], wires=range(self.n_qubits))
+                # qml.BasicEntanglerLayers(weights[l:l+1], wires=range(self.n_qubits))
 
             # Multi-basis readout
             obs = []
@@ -43,11 +44,16 @@ class qnn_basic(nn.Module):
                 obs += [qml.expval(qml.PauliY(i)) for i in range(self.n_qubits)]
             if "Z" in self.readout_axes:
                 obs += [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
+                
+            # Correlation readout
+            # obs += [qml.expval(qml.PauliZ(i) @ qml.PauliZ((i+1)%self.n_qubits)) for i in range(self.n_qubits)]
+
             return obs
 
         qnode = qml.QNode(circuit, self.dev, interface="torch")
         weight_shapes = {
             "weights": qml.StronglyEntanglingLayers.shape(n_layers, n_qubits)
+            # "weights": qml.BasicEntanglerLayers.shape(n_layers, n_qubits)
         }
         self.q_layer = qml.qnn.TorchLayer(qnode, weight_shapes)
         

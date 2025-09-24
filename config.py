@@ -73,6 +73,10 @@ class Config:
     verbose: bool = False
     device_id: int = 0
     
+    # === Quantum settings ===
+    n_qubits: int = 8
+    n_layers: int = 2
+    
     def __post_init__(self):
         """Initialization after processing"""
         if self.time_windows is None:
@@ -169,6 +173,9 @@ def create_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--device_id", type=int, default=0, help="CUDA device ID")
     
+    # === Quantum settings ===
+    parser.add_argument("--n_qubits", type=int, default=8, help="Number of qubits")
+    parser.add_argument("--n_layers", type=int, default=2, help="Number of quantum layers")
     return parser
 
 
@@ -249,7 +256,11 @@ def parse_args() -> Config:
         output_dir=args.out_dir,
         run_name=args.run_name,
         verbose=args.verbose,
-        device_id=args.device_id
+        device_id=args.device_id,
+        
+        # Quantum settings
+        n_qubits=args.n_qubits,
+        n_layers=args.n_layers
     )
     
     return config
